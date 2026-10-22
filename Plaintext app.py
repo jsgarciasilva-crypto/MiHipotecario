@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import plotly.express as px
@@ -253,24 +252,4 @@ with tab1:
 with tab2:
     st.subheader("Auditoría de Pagos y Porcentajes de Avance")
     
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Capital Amortizado", f"${cap_pagado:,.2f}", f"{pct_cap:.1f}% del total")
-    c2.metric("Intereses Cancelados", f"${int_pagado:,.2f}", f"{pct_int:.1f}% del total")
-    c3.metric("Seguros Desembolsados", f"${seg_pagado:,.2f}", f"{pct_seg:.1f}% del total")
-    c4.metric("Desembolso General", f"${tot_desembolsado:,.2f}", f"{pct_tot:.1f}% del total")
-
-    st.markdown("---")
-    st.markdown("#### Tabla de Distribución Financiera")
-    
-    tabla_resumen = pd.DataFrame({
-        "Rubro": ["Capital", "Intereses", "Seguros", "Total General"],
-        "Total Proyectado ($)": [cap_total, int_total, seg_total, costo_total_credito],
-        "Pagado a la Fecha ($)": [cap_pagado, int_pagado, seg_pagado, tot_desembolsado],
-        "% Pagado": [f"{pct_cap:.2f}%", f"{pct_int:.2f}%", f"{pct_seg:.2f}%", f"{pct_tot:.2f}%"],
-        "Saldo Pendiente ($)": [saldo_deudor, int_pendiente, seg_pendiente, costo_pendiente],
-        "% Pendiente": [f"{100-pct_cap:.2f}%", f"{100-pct_int:.2f}%", f"{100-pct_seg:.2f}%", f"{100-pct_tot:.2f}%"]
-    })
-    
-    st.dataframe(
-        tabla_resumen.style.format({
-            "Total Proyectado ($)
+    c1, c2, c3, c4 = st
