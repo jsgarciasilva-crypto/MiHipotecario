@@ -224,4 +224,4 @@ with tab2:
     col4.metric("Desembolso General", f"${tot_desembolsado:,.2f}", f"{pct_tot:.1f}%")
     st.markdown("---")
     st.markdown("#### Tabla de Distribucion Financiera")
-    tabla_resumen =
+    tabla_resumen=
