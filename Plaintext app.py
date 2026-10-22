@@ -67,7 +67,7 @@ URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUd
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Inicialización persistente y reactiva de los pagos
+# Inicialización persistente de estado
 if "pagos_lista" not in st.session_state:
     try:
         df_sheet = conn.read(spreadsheet=URL_HOJA, ttl=0)
@@ -78,10 +78,18 @@ if "pagos_lista" not in st.session_state:
             pagos = [False] * 240
     except Exception:
         pagos = [False] * 240
-        
     if len(pagos) < 240:
         pagos.extend([False] * (240 - len(pagos)))
     st.session_state["pagos_lista"] = pagos[:240]
+
+if "abono_activo" not in st.session_state:
+    st.session_state["abono_activo"] = False
+if "abono_mes" not in st.session_state:
+    st.session_state["abono_mes"] = 6
+if "abono_monto" not in st.session_state:
+    st.session_state["abono_monto"] = 30000.0
+if "abono_tipo" not in st.session_state:
+    st.session_state["abono_tipo"] = "Reducir Plazo"
 
 def actualizar_check(idx):
     st.session_state["pagos_lista"][idx] = st.session_state[f"chk_{idx}"]
@@ -103,56 +111,106 @@ with st.sidebar:
     sistema = st.selectbox("Sistema Amortizacion", ["Frances (Cuota Fija)", "Aleman (Capital Fijo)"])
 
 # Parámetros calculados en caliente
-meses = int(plazo_anios * 12)
+meses_orig = int(plazo_anios * 12)
 tasa_mes = (tasa_anual / 100.0) / 12.0
 tasa_desg_mes = (tasa_desgravamen / 100.0) / 12.0
 cuota_incendio = (valor_vivienda * (tasa_incendio / 100.0)) / 12.0
 
-def generar_amortizacion(monto_val, plazo_val, sistema_val, fecha_val, t_anual_val, t_desg_val, t_inc_val, v_casa_val):
-    tabla = []
-    saldo = float(monto_val)
+# Motor de cálculo de amortización con soporte para prepago real
+def calcular_cronograma(
+    monto_val, plazo_anios_val, sistema_val, fecha_val, 
+    t_anual_val, t_desg_val, t_inc_val, v_casa_val,
+    con_abono=False, ab_mes=6, ab_monto=0.0, ab_tipo="Reducir Plazo"
+):
+    plazo_m_orig = int(plazo_anios_val * 12)
     tm = (t_anual_val / 100.0) / 12.0
     tdm = (t_desg_val / 100.0) / 12.0
     ci = (v_casa_val * (t_inc_val / 100.0)) / 12.0
 
     if "Frances" in sistema_val:
-        factor = (1.0 + tm) ** plazo_val
-        cuota_cap_int = monto_val * (tm * factor) / (factor - 1.0)
+        factor = (1.0 + tm) ** plazo_m_orig
+        cuota_cap_int_actual = monto_val * (tm * factor) / (factor - 1.0)
     else:
-        abono_capital_fijo = monto_val / plazo_val
+        abono_capital_fijo = monto_val / plazo_m_orig
 
-    for mes in range(1, plazo_val + 1):
+    saldo = float(monto_val)
+    tabla = []
+    mes = 0
+
+    while saldo > 0.01 and mes < 360:
+        mes += 1
         interes = saldo * tm
         seg_desg = saldo * tdm
+
+        extra = float(ab_monto) if (con_abono and mes == ab_mes) else 0.0
+
         if "Frances" in sistema_val:
-            capital = cuota_cap_int - interes
+            capital_reg = cuota_cap_int_actual - interes
         else:
-            capital = abono_capital_fijo
-            
-        cuota_total = capital + interes + seg_desg + ci
-        saldo -= capital
+            capital_reg = abono_capital_fijo
+
+        capital_total = capital_reg + extra
+
+        if capital_total > saldo:
+            capital_total = saldo
+            capital_reg = max(0.0, saldo - extra)
+
+        cuota_total = capital_total + interes + seg_desg + ci
+        saldo -= capital_total
         fecha_pago = fecha_val + relativedelta(months=mes - 1)
+
         tabla.append({
             "Mes": mes,
             "Fecha": fecha_pago.strftime('%Y-%m'),
             "Anio": fecha_pago.year,
-            "Capital": round(capital, 2),
+            "Capital": round(capital_total, 2),
+            "Capital_Regular": round(capital_reg, 2),
+            "Abono_Extra": round(extra, 2),
             "Interes": round(interes, 2),
             "Seguros": round(seg_desg + ci, 2),
             "Cuota_Total": round(cuota_total, 2),
             "Saldo": round(max(0.0, saldo), 2)
         })
+
+        if con_abono and mes == ab_mes and saldo > 0.01:
+            if ab_tipo == "Reducir Cuota":
+                meses_rest = plazo_m_orig - mes
+                if "Frances" in sistema_val:
+                    factor_n = (1.0 + tm) ** meses_rest
+                    cuota_cap_int_actual = saldo * (tm * factor_n) / (factor_n - 1.0)
+                else:
+                    abono_capital_fijo = saldo / meses_rest
+
     return pd.DataFrame(tabla)
 
-df_base = generar_amortizacion(monto, meses, sistema, fecha_inicio, tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda)
+# Generar cronograma original de referencia
+df_original = calcular_cronograma(
+    monto, plazo_anios, sistema, fecha_inicio,
+    tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda,
+    con_abono=False
+)
+
+# Generar cronograma activo (con abono si el usuario lo activó)
+df_base = calcular_cronograma(
+    monto, plazo_anios, sistema, fecha_inicio,
+    tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda,
+    con_abono=st.session_state["abono_activo"],
+    ab_mes=st.session_state["abono_mes"],
+    ab_monto=st.session_state["abono_monto"],
+    ab_tipo=st.session_state["abono_tipo"]
+)
+
+meses_totales = len(df_base)
+meses_ahorrados_abono = len(df_original) - len(df_base)
+ahorro_intereses_abono = max(0.0, df_original["Interes"].sum() - df_base["Interes"].sum())
 
 # Cantidad de pagos actualizada al instante
-cuotas_pagadas_actual = sum(st.session_state["pagos_lista"])
-cuotas_restantes = max(0, meses - cuotas_pagadas_actual)
-pct_cuotas_pag = (cuotas_pagadas_actual / meses * 100.0) if meses > 0 else 0.0
+cuotas_pagadas_actual = min(sum(st.session_state["pagos_lista"]), meses_totales)
+cuotas_restantes = max(0, meses_totales - cuotas_pagadas_actual)
+pct_cuotas_pag = (cuotas_pagadas_actual / meses_totales * 100.0) if meses_totales > 0 else 0.0
 pct_cuotas_pend = max(0.0, 100.0 - pct_cuotas_pag)
 
-if cuotas_pagadas_actual > 0 and cuotas_pagadas_actual <= len(df_base):
+if cuotas_pagadas_actual > 0:
     df_pagado = df_base.iloc[:cuotas_pagadas_actual]
     cap_pagado = float(df_pagado["Capital"].sum())
     int_pagado = float(df_pagado["Interes"].sum())
@@ -180,7 +238,7 @@ pct_seg = (seg_pagado / seg_total * 100.0) if seg_total > 0 else 0.0
 pct_tot = (tot_desembolsado / costo_total_credito * 100.0) if costo_total_credito > 0 else 0.0
 
 # Cálculo de próxima cuota y semáforo en tiempo real
-proximo_mes_idx = min(cuotas_pagadas_actual, meses - 1)
+proximo_mes_idx = min(cuotas_pagadas_actual, meses_totales - 1)
 fila_proxima = df_base.iloc[proximo_mes_idx]
 fecha_prox_dt = fecha_inicio + relativedelta(months=proximo_mes_idx)
 hoy = date.today()
@@ -239,9 +297,15 @@ def generar_pdf():
     pdf.cell(95, 5, f"Monto Financiado: ${monto:,.2f}")
     pdf.cell(95, 5, f"Tasa Nominal Anual: {tasa_anual:.2f}%", ln=True)
     pdf.cell(95, 5, f"Sistema: {sistema.split(' ')[0]}")
-    pdf.cell(95, 5, f"Plazo: {plazo_anios} anios ({meses} meses)", ln=True)
+    
+    if st.session_state["abono_activo"]:
+        plazo_str = f"{meses_totales} meses ({meses_totales/12:.1f} anios) [Abono ${st.session_state['abono_monto']:,.0f} aplicado]"
+    else:
+        plazo_str = f"{meses_totales} meses ({plazo_anios} anios)"
+    pdf.cell(95, 5, f"Plazo Vigente: {plazo_str}", ln=True)
+    
     pdf.cell(95, 5, f"Fecha Primera Cuota: {fecha_inicio.strftime('%Y-%m-%d')}")
-    pdf.cell(95, 5, f"Cuotas Pagadas: {cuotas_pagadas_actual} de {meses}", ln=True)
+    pdf.cell(95, 5, f"Cuotas Pagadas: {cuotas_pagadas_actual} de {meses_totales}", ln=True)
     pdf.ln(4)
     
     pdf.set_font("Helvetica", "B", 11)
@@ -270,7 +334,7 @@ def generar_pdf():
     pdf.cell(36, 6, "% Pagado", border=1, align="C", fill=True, ln=True)
     
     filas_pdf = [
-        ("Cuotas (Plazo)", f"{meses} cuotas", f"{cuotas_pagadas_actual} pagadas", f"{cuotas_restantes} faltantes", pct_cuotas_pag),
+        ("Cuotas (Plazo)", f"{meses_totales} cuotas", f"{cuotas_pagadas_actual} pagadas", f"{cuotas_restantes} faltantes", pct_cuotas_pag),
         ("Capital", cap_total, cap_pagado, saldo_deudor, pct_cap),
         ("Intereses", int_total, int_pagado, int_pendiente, pct_int),
         ("Seguros", seg_total, seg_pagado, seg_pendiente, pct_seg),
@@ -332,8 +396,15 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 with tab1:
     st.subheader("Registro de Cuotas Canceladas")
     
+    if st.session_state["abono_activo"]:
+        if st.session_state["abono_tipo"] == "Reducir Plazo":
+            st.success(f"⚡ **Abono Activo de ${st.session_state['abono_monto']:,.2f} en Mes {st.session_state['abono_mes']}:** El plazo se redujo a **{meses_totales} cuotas** ({meses_totales/12:.1f} anios). Terminara {meses_ahorrados_abono} meses antes.")
+        else:
+            nueva_c = df_base.loc[df_base['Mes'] == min(st.session_state['abono_mes'] + 1, meses_totales), 'Cuota_Total'].values[0]
+            st.success(f"⚡ **Abono Activo de ${st.session_state['abono_monto']:,.2f} en Mes {st.session_state['abono_mes']}:** A partir del Mes {st.session_state['abono_mes'] + 1}, tu cuota baja a **${nueva_c:,.2f}**.")
+            
     col_t1, col_t2 = st.columns([3, 1])
-    col_t1.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses}** | Saldo Deudor: **${saldo_deudor:,.2f}**")
+    col_t1.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses_totales}** | Saldo Deudor: **${saldo_deudor:,.2f}**")
     
     if col_t2.button("💾 Guardar en la Nube", key="btn_save_top"):
         with st.spinner("Guardando permanentemente en Google Sheets..."):
@@ -343,15 +414,16 @@ with tab1:
             except Exception as err_puente:
                 st.error(f"Error al enviar datos: {err_puente}")
 
-    anios_credito = list(range(1, int(plazo_anios) + 1))
+    anios_max = int(np.ceil(meses_totales / 12.0))
+    anios_credito = list(range(1, anios_max + 1))
     anio_seleccionado = st.selectbox("Selecciona el Anio del Credito:", anios_credito)
     mes_inicio_vista = (anio_seleccionado - 1) * 12
-    mes_fin_vista = min(anio_seleccionado * 12, meses)
+    mes_fin_vista = min(anio_seleccionado * 12, meses_totales)
     st.markdown("---")
     
     for i in range(mes_inicio_vista, mes_fin_vista):
         fila = df_base.iloc[i]
-        c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
+        c1, c2, c3, c4 = st.columns([1, 2, 2.5, 1.5])
         valor_actual = st.session_state["pagos_lista"][i]
         
         check = c1.checkbox(
@@ -362,7 +434,15 @@ with tab1:
             args=(i,)
         )
         c2.write(f"📅 **{fila['Fecha']}**")
-        c3.write(f"💵 **Cuota:** ${fila['Cuota_Total']:,.2f}")
+        
+        # Etiqueta visual para distinguir abonos y cuotas reducidas
+        if fila['Abono_Extra'] > 0:
+            c3.markdown(f"💵 **Cuota:** ${fila['Cuota_Total']:,.2f} *(Incluye Abono ${fila['Abono_Extra']:,.0f})*")
+        elif i == meses_totales - 1 and st.session_state["abono_activo"] and st.session_state["abono_tipo"] == "Reducir Plazo":
+            c3.markdown(f"💵 **Cuota Final:** ${fila['Cuota_Total']:,.2f} 🏁 *(Liquidación deuda)*")
+        else:
+            c3.write(f"💵 **Cuota:** ${fila['Cuota_Total']:,.2f}")
+            
         c4.markdown("✅ *Pagado*" if valor_actual else "⏳ *Pendiente*")
         st.divider()
         
@@ -377,20 +457,24 @@ with tab1:
 with tab2:
     st.subheader("Auditoria de Pagos y Porcentajes de Avance")
     
-    # Métricas de dinero desembolsado
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Capital Amortizado", f"${cap_pagado:,.2f}", f"{pct_cap:.1f}% amortizado")
     col2.metric("Intereses Cancelados", f"${int_pagado:,.2f}", f"{pct_int:.1f}% pagado")
     col3.metric("Seguros Desembolsados", f"${seg_pagado:,.2f}", f"{pct_seg:.1f}% pagado")
     col4.metric("Desembolso General", f"${tot_desembolsado:,.2f}", f"{pct_tot:.1f}% del costo total")
 
-    # Métricas exclusivas del plazo y cuotas (cumplidas vs faltantes)
     st.markdown("#### ⏳ Estado del Plazo y Cuotas")
     col_q1, col_q2 = st.columns(2)
+    
+    if st.session_state["abono_activo"] and meses_ahorrados_abono > 0:
+        desc_plazo = f"{pct_cuotas_pag:.2f}% ({meses_ahorrados_abono} meses ahorrados)"
+    else:
+        desc_plazo = f"{pct_cuotas_pag:.2f}% del plazo total cumplido"
+        
     col_q1.metric(
         "Cuotas Canceladas", 
-        f"{cuotas_pagadas_actual} de {meses} cuotas", 
-        f"{pct_cuotas_pag:.2f}% del plazo total cumplido"
+        f"{cuotas_pagadas_actual} de {meses_totales} cuotas", 
+        desc_plazo
     )
     col_q2.metric(
         "Cuotas Faltantes / Restantes", 
@@ -402,10 +486,13 @@ with tab2:
     st.markdown("---")
     st.markdown("#### Tabla de Distribucion Financiera")
     
+    txt_proy_cuotas = f"{meses_totales} cuotas" + (f" (-{meses_ahorrados_abono} ahorradas)" if meses_ahorrados_abono > 0 else "")
+    txt_proy_int = f"${int_total:,.2f}" + (f" (Ahorro: ${ahorro_intereses_abono:,.2f})" if ahorro_intereses_abono > 0 else "")
+    
     filas_resumen = [
         {
             "Rubro": "📅 Cuotas (Plazo)", 
-            "Total Proyectado": f"{meses} cuotas", 
+            "Total Proyectado": txt_proy_cuotas, 
             "Pagado a la Fecha": f"{cuotas_pagadas_actual} pagadas", 
             "% Pagado": f"{pct_cuotas_pag:.2f}%", 
             "Saldo Pendiente": f"{cuotas_restantes} faltantes", 
@@ -421,7 +508,7 @@ with tab2:
         },
         {
             "Rubro": "📈 Intereses", 
-            "Total Proyectado": f"${int_total:,.2f}", 
+            "Total Proyectado": txt_proy_int, 
             "Pagado a la Fecha": f"${int_pagado:,.2f}", 
             "% Pagado": f"{pct_int:.2f}%", 
             "Saldo Pendiente": f"${int_pendiente:,.2f}", 
@@ -454,17 +541,35 @@ with tab2:
 
     st.markdown("---")
     st.markdown("#### Curva de Amortizacion: Descenso de Saldo Deudor")
-    fig_saldo = px.area(
-        df_base, 
-        x="Mes", 
-        y="Saldo", 
-        title="Proyeccion del Saldo Deudor en el Tiempo",
-        labels={"Saldo": "Saldo Deudor ($)", "Mes": "Numero de Mes"},
-        color_discrete_sequence=[COLOR_NAVY]
-    )
+    
+    fig_saldo = go.Figure()
+    
+    # Trayectoria original si hay abono activo
+    if st.session_state["abono_activo"]:
+        fig_saldo.add_trace(go.Scatter(
+            x=df_original["Mes"],
+            y=df_original["Saldo"],
+            mode="lines",
+            name="Trayectoria Original (Sin Abono)",
+            line=dict(color="#A0AEC0", dash="dash")
+        ))
+        
+    fig_saldo.add_trace(go.Scatter(
+        x=df_base["Mes"],
+        y=df_base["Saldo"],
+        mode="lines",
+        name="Saldo con Abono Aplicado" if st.session_state["abono_activo"] else "Saldo Deudor",
+        fill="tozeroy",
+        line=dict(color=COLOR_NAVY, width=2.5)
+    ))
+    
     if cuotas_pagadas_actual > 0:
         fig_saldo.add_vline(x=cuotas_pagadas_actual, line_dash="dash", line_color=COLOR_GOLD, annotation_text="Punto Actual")
+        
     fig_saldo.update_layout(
+        title="Evolución del Saldo Deudor en el Tiempo",
+        xaxis_title="Número de Mes",
+        yaxis_title="Saldo Deudor ($)",
         plot_bgcolor="#FFFFFF",
         paper_bgcolor="#FFFFFF",
         font=dict(color=COLOR_NAVY)
@@ -472,41 +577,55 @@ with tab2:
     st.plotly_chart(fig_saldo, use_container_width=True)
 
 with tab3:
-    st.subheader("Simulador de Abonos Extraordinarios Puntuales")
+    st.subheader("Simulador y Aplicador de Abonos Extraordinarios Puntuales")
+    st.markdown("Configura un abono extraordinario a capital y decide si deseas mantenerlo en simulación o aplicarlo directamente a todo tu crédito.")
+    
     col_a, col_b, col_c = st.columns(3)
-    mes_sug = min(cuotas_pagadas_actual + 1, meses)
-    mes_abono = col_a.number_input("Mes del abono", min_value=1, max_value=meses, value=mes_sug, key="abono_mes_input")
-    monto_abono = col_b.number_input("Monto del Abono ($)", min_value=100.0, value=5000.0, step=500.0, key="abono_monto_input")
-    tipo_beneficio = col_c.radio("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], key="abono_tipo_input")
-    if st.button("Calcular impacto del abono puntual"):
-        if mes_abono < meses:
-            saldo_en_mes = df_base.loc[mes_abono-1, 'Saldo']
-            if monto_abono >= saldo_en_mes:
-                st.success("Con este monto cancelas la totalidad de la deuda!")
-            else:
-                nuevo_saldo = saldo_en_mes - monto_abono
-                meses_restantes = meses - mes_abono
-                tot_int_orig = df_base['Interes'].sum()
-                if tipo_beneficio == "Reducir Cuota":
-                    df_nuevo = generar_amortizacion(nuevo_saldo, meses_restantes, sistema, fecha_inicio + relativedelta(months=mes_abono), tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda)
-                    nueva_cuota = df_nuevo.loc[0, 'Cuota_Total']
-                    ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interes'].sum() + df_nuevo['Interes'].sum())
-                    st.success(f"Tu nueva cuota baja a: **\\${nueva_cuota:,.2f}**")
-                    st.info(f"Ahorro estimado en intereses: **\\${ahorro:,.2f}**")
-                else:
-                    cuota_ref = df_base.loc[mes_abono, 'Capital'] + df_base.loc[mes_abono, 'Interes']
-                    try:
-                        n_meses = -np.log(1 - (nuevo_saldo * tasa_mes) / cuota_ref) / np.log(1 + tasa_mes)
-                        n_meses = int(np.ceil(n_meses))
-                        ahorrados = meses_restantes - n_meses
-                        df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono), tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda)
-                        ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interes'].sum() + df_nuevo['Interes'].sum())
-                        st.success(f"Terminas de pagar **{ahorrados} meses antes** (equivale a {ahorrados/12:.1f} anios).")
-                        st.info(f"Ahorro estimado en intereses: **\\${ahorro:,.2f}**")
-                    except Exception:
-                        st.info("El abono cubre la totalidad del credito pendiente.")
-        else:
-            st.warning("No es posible realizar un abono en la ultima cuota.")
+    mes_abono_input = col_a.number_input("Mes del abono", min_value=1, max_value=meses_orig, value=st.session_state["abono_mes"], key="input_mes_abono")
+    monto_abono_input = col_b.number_input("Monto del Abono ($)", min_value=100.0, value=float(st.session_state["abono_monto"]), step=1000.0, key="input_monto_abono")
+    tipo_abono_input = col_c.radio("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], index=0 if st.session_state["abono_tipo"] == "Reducir Plazo" else 1, key="input_tipo_abono")
+    
+    # Cálculo instantáneo del impacto
+    df_sim = calcular_cronograma(
+        monto, plazo_anios, sistema, fecha_inicio,
+        tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda,
+        con_abono=True, ab_mes=mes_abono_input, ab_monto=monto_abono_input, ab_tipo=tipo_abono_input
+    )
+    
+    int_sim_tot = df_sim["Interes"].sum()
+    ahorro_sim_int = max(0.0, df_original["Interes"].sum() - int_sim_tot)
+    meses_ahorrados_sim = len(df_original) - len(df_sim)
+    
+    if tipo_abono_input == "Reducir Plazo":
+        st.success(f"🎉 **Terminas de pagar {meses_ahorrados_sim} meses antes** (equivale a {meses_ahorrados_sim/12:.1f} anios).")
+        st.info(f"💰 **Ahorro estimado en intereses:** ${ahorro_sim_int:,.2f}")
+    else:
+        nueva_cuota_sim = df_sim.loc[df_sim['Mes'] == min(mes_abono_input + 1, len(df_sim)), 'Cuota_Total'].values[0]
+        st.success(f"🎉 **Tu nueva cuota baja a: ${nueva_cuota_sim:,.2f}** a partir del Mes {mes_abono_input + 1}.")
+        st.info(f"💰 **Ahorro estimado en intereses:** ${ahorro_sim_int:,.2f}")
+
+    st.markdown("---")
+    st.markdown("#### ⚡ Control de Aplicación al Crédito")
+    
+    col_act1, col_act2 = st.columns([2, 1])
+    
+    activar = col_act1.toggle(
+        "📌 APLICAR este abono al crédito real (impactar todo el dashboard)",
+        value=st.session_state["abono_activo"],
+        key="toggle_abono_master"
+    )
+    
+    if activar != st.session_state["abono_activo"] or mes_abono_input != st.session_state["abono_mes"] or monto_abono_input != st.session_state["abono_monto"] or tipo_abono_input != st.session_state["abono_tipo"]:
+        st.session_state["abono_activo"] = activar
+        st.session_state["abono_mes"] = mes_abono_input
+        st.session_state["abono_monto"] = monto_abono_input
+        st.session_state["abono_tipo"] = tipo_abono_input
+        st.rerun()
+        
+    if st.session_state["abono_activo"]:
+        st.success(f"🟢 **Abono Activo e Incorporado:** El abono de ${st.session_state['abono_monto']:,.2f} en el Mes {st.session_state['abono_mes']} ({st.session_state['abono_tipo']}) está aplicado a toda la amortización. Las pestañas de **Control de Pagos**, **Avance y Gráficos**, **SRI** y el **Reporte PDF** ya reflejan este cambio.")
+    else:
+        st.warning("⚪ **Modo Simulación:** El abono no está aplicado al crédito general. Activa el interruptor arriba cuando desees que impacte todo el dashboard.")
 
 with tab4:
     st.subheader("❄️ Simulador de Micro-Abonos Mensuales (Efecto Bola de Nieve)")
@@ -514,17 +633,17 @@ with tab4:
     
     col_sn1, col_sn2 = st.columns(2)
     micro_abono = col_sn1.slider("Abono extra mensual a capital ($)", min_value=25, max_value=1000, value=100, step=25)
-    mes_inicio_snowball = col_sn2.number_input("Iniciar micro-abonos desde el mes:", min_value=cuotas_pagadas_actual + 1, max_value=meses, value=cuotas_pagadas_actual + 1)
+    mes_inicio_snowball = col_sn2.number_input("Iniciar micro-abonos desde el mes:", min_value=cuotas_pagadas_actual + 1, max_value=meses_totales, value=cuotas_pagadas_actual + 1)
     
     saldo_snow = saldo_deudor
     meses_transcurridos = cuotas_pagadas_actual
     tot_int_snow = int_pagado
     
-    factor_ref = (1 + tasa_mes) ** meses
+    factor_ref = (1 + tasa_mes) ** meses_orig
     cuota_fija_cap_int = monto * (tasa_mes * factor_ref) / (factor_ref - 1)
     
     mes_actual_sim = meses_transcurridos
-    while saldo_snow > 0.01 and mes_actual_sim < meses:
+    while saldo_snow > 0.01 and mes_actual_sim < 360:
         mes_actual_sim += 1
         interes_mes = saldo_snow * tasa_mes
         tot_int_snow += interes_mes
@@ -535,16 +654,16 @@ with tab4:
         capital_total_mes = min(saldo_snow, capital_regular + abono_aplicable)
         saldo_snow -= capital_total_mes
     
-    meses_ahorrados_snow = meses - mes_actual_sim
+    meses_ahorrados_snow = max(0, meses_totales - mes_actual_sim)
     anios_ahorrados_snow = meses_ahorrados_snow / 12.0
     ahorro_interes_snow = max(0.0, int_total - tot_int_snow)
     
     cs1, cs2, cs3 = st.columns(3)
     cs1.metric("Tiempo Ahorrado", f"{meses_ahorrados_snow} meses", f"{anios_ahorrados_snow:.1f} anios antes")
     cs2.metric("Ahorro Total en Intereses", f"${ahorro_interes_snow:,.2f}")
-    cs3.metric("Nuevo Mes Final", f"Mes {mes_actual_sim} de {meses}")
+    cs3.metric("Nuevo Mes Final", f"Mes {mes_actual_sim} de {meses_totales}")
     
-    st.info(f"💡 Al aportar **\\${micro_abono:,.2f} extra cada mes**, cancelas tu deuda en **{mes_actual_sim - cuotas_pagadas_actual} meses mas** en lugar de {meses - cuotas_pagadas_actual} meses restantes.")
+    st.info(f"💡 Al aportar **\\${micro_abono:,.2f} extra cada mes**, cancelas tu deuda en **{mes_actual_sim - cuotas_pagadas_actual} meses mas** en lugar de {cuotas_restantes} meses restantes.")
 
 with tab5:
     st.subheader("⚖️ Analisis Financiero: Prepagar Credito vs Invertir en Poliza")
