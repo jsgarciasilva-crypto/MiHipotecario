@@ -20,10 +20,9 @@ COLOR_NAVY = "#0E2A47"
 COLOR_GOLD = "#C5A059"
 COLOR_BG_CARD = "#FFFFFF"
 
-# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS ---
+# --- ESTILOS VISUALES ---
 st.markdown(f"""
 <style>
-    /* Titulo principal */
     .header-title {{
         color: {COLOR_NAVY};
         font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -39,7 +38,6 @@ st.markdown(f"""
         letter-spacing: 1px;
         margin-bottom: 20px;
     }}
-    /* Botones principales */
     .stButton>button, .stDownloadButton>button {{
         background-color: {COLOR_NAVY} !important;
         color: #FFFFFF !important;
@@ -53,7 +51,6 @@ st.markdown(f"""
         color: {COLOR_NAVY} !important;
         border: 1px solid {COLOR_NAVY} !important;
     }}
-    /* Pestanas activas */
     button[data-baseweb="tab"][aria-selected="true"] {{
         border-bottom-color: {COLOR_GOLD} !important;
         color: {COLOR_NAVY} !important;
@@ -83,64 +80,71 @@ except Exception as err:
     st.error(f"Aviso de conexion: {err}")
     df_checks = pd.DataFrame({"Mes": range(1, 241), "Estado_Pago": [False] * 240})
 
+# --- BARRA LATERAL DINÁMICA (CADA CAMBIO RECALCULA TODO EN TIEMPO REAL) ---
 with st.sidebar:
     st.header("1. Datos del Credito")
     fecha_inicio = st.date_input("Fecha inicio / primera cuota", datetime(2023, 1, 15))
-    valor_vivienda = st.number_input("Valor casa ($)", value=100000.0, step=5000.0)
-    monto = st.number_input("Monto Financiado ($)", value=80000.0, step=1000.0)
-    tasa_anual = st.number_input("Tasa Anual (%)", value=9.5, step=0.1)
+    valor_vivienda = st.number_input("Valor casa ($)", value=315000.0, step=5000.0)
+    monto = st.number_input("Monto Financiado ($)", value=230000.0, step=1000.0)
+    tasa_anual = st.number_input("Tasa Anual (%)", value=6.5, step=0.1)
     plazo_anios = st.number_input("Plazo (Anios)", value=20, step=1)
     
     st.header("2. Seguros")
-    tasa_desgravamen = st.number_input("Seg. Desgravamen (%)", value=0.72)
-    tasa_incendio = st.number_input("Seg. Incendio (%)", value=0.15)
+    tasa_desgravamen = st.number_input("Seg. Desgravamen (%)", value=0.72, step=0.01)
+    tasa_incendio = st.number_input("Seg. Incendio (%)", value=0.15, step=0.01)
 
     st.header("3. Sistema")
     sistema = st.selectbox("Sistema Amortizacion", ["Frances (Cuota Fija)", "Aleman (Capital Fijo)"])
 
+# Parámetros calculados en caliente según lo ingresado en la barra lateral
 meses = int(plazo_anios * 12)
-tasa_mes = (tasa_anual / 100) / 12
-tasa_desg_mes = (tasa_desgravamen / 100) / 12
-cuota_incendio = (valor_vivienda * (tasa_incendio / 100)) / 12
+tasa_mes = (tasa_anual / 100.0) / 12.0
+tasa_desg_mes = (tasa_desgravamen / 100.0) / 12.0
+cuota_incendio = (valor_vivienda * (tasa_incendio / 100.0)) / 12.0
 
-@st.cache_data
-def generar_amortizacion(monto_inicial, plazo_meses, sistema_amort, fecha_arranque):
+# Función pura de amortización sin caché para respuesta dinámica inmediata
+def generar_amortizacion(monto_val, plazo_val, sistema_val, fecha_val, t_anual_val, t_desg_val, t_inc_val, v_casa_val):
     tabla = []
-    saldo = float(monto_inicial)
-    if "Frances" in sistema_amort:
-        factor = (1 + tasa_mes) ** plazo_meses
-        cuota_cap_int = monto_inicial * (tasa_mes * factor) / (factor - 1)
-    else:
-        abono_capital_fijo = monto_inicial / plazo_meses
+    saldo = float(monto_val)
+    tm = (t_anual_val / 100.0) / 12.0
+    tdm = (t_desg_val / 100.0) / 12.0
+    ci = (v_casa_val * (t_inc_val / 100.0)) / 12.0
 
-    for mes in range(1, plazo_meses + 1):
-        interes = saldo * tasa_mes
-        seg_desg = saldo * tasa_desg_mes
-        if "Frances" in sistema_amort:
+    if "Frances" in sistema_val:
+        factor = (1.0 + tm) ** plazo_val
+        cuota_cap_int = monto_val * (tm * factor) / (factor - 1.0)
+    else:
+        abono_capital_fijo = monto_val / plazo_val
+
+    for mes in range(1, plazo_val + 1):
+        interes = saldo * tm
+        seg_desg = saldo * tdm
+        if "Frances" in sistema_val:
             capital = cuota_cap_int - interes
         else:
             capital = abono_capital_fijo
             
-        cuota_total = capital + interes + seg_desg + cuota_incendio
+        cuota_total = capital + interes + seg_desg + ci
         saldo -= capital
-        fecha_pago = fecha_arranque + relativedelta(months=mes - 1)
+        fecha_pago = fecha_val + relativedelta(months=mes - 1)
         tabla.append({
             "Mes": mes,
             "Fecha": fecha_pago.strftime('%Y-%m'),
             "Anio": fecha_pago.year,
             "Capital": round(capital, 2),
             "Interes": round(interes, 2),
-            "Seguros": round(seg_desg + cuota_incendio, 2),
+            "Seguros": round(seg_desg + ci, 2),
             "Cuota_Total": round(cuota_total, 2),
             "Saldo": round(max(0.0, saldo), 2)
         })
     return pd.DataFrame(tabla)
 
-df_base = generar_amortizacion(monto, meses, sistema, fecha_inicio)
+# Se recalcula la tabla entera al instante con cualquier cambio del usuario
+df_base = generar_amortizacion(monto, meses, sistema, fecha_inicio, tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda)
 
 cuotas_pagadas_actual = int(df_checks["Estado_Pago"].sum())
 
-if cuotas_pagadas_actual > 0:
+if cuotas_pagadas_actual > 0 and cuotas_pagadas_actual <= len(df_base):
     df_pagado = df_base.iloc[:cuotas_pagadas_actual]
     cap_pagado = float(df_pagado["Capital"].sum())
     int_pagado = float(df_pagado["Interes"].sum())
@@ -167,7 +171,7 @@ pct_int = (int_pagado / int_total * 100.0) if int_total > 0 else 0.0
 pct_seg = (seg_pagado / seg_total * 100.0) if seg_total > 0 else 0.0
 pct_tot = (tot_desembolsado / costo_total_credito * 100.0) if costo_total_credito > 0 else 0.0
 
-# Calculo de proxima cuota y semaforo
+# Cálculo dinámico de próxima cuota y semáforo
 proximo_mes_idx = min(cuotas_pagadas_actual, meses - 1)
 fila_proxima = df_base.iloc[proximo_mes_idx]
 fecha_prox_dt = fecha_inicio + relativedelta(months=proximo_mes_idx)
@@ -184,7 +188,6 @@ elif dias_restantes == 0:
 else:
     col_b3.metric("Estado de Cuota", f"Corte paso hace {abs(dias_restantes)} dias", delta="Verificar pago", delta_color="inverse")
 
-# --- GENERADOR DEL PDF ESTILIZADO GARCIA ANDRADE ---
 def generar_pdf():
     pdf = FPDF()
     pdf.add_page()
@@ -195,7 +198,6 @@ def generar_pdf():
     C_RGB_TEXT = (45, 55, 72)
     C_RGB_GRAY = (240, 243, 246)
     
-    # Cenefa decorativa superior institucional
     pdf.set_fill_color(*C_RGB_NAVY)
     pdf.rect(10, 10, 190, 4, "F")
     pdf.set_fill_color(*C_RGB_GOLD)
@@ -215,13 +217,11 @@ def generar_pdf():
     pdf.cell(0, 5, f"Fecha de corte: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
     pdf.ln(4)
     
-    # Linea dorada separadora
     pdf.set_draw_color(*C_RGB_GOLD)
     pdf.set_line_width(0.5)
     pdf.line(15, pdf.get_y(), 195, pdf.get_y())
     pdf.ln(5)
     
-    # Seccion 1
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(*C_RGB_NAVY)
     pdf.cell(0, 6, "1. CONDICIONES GENERALES DEL CREDITO", ln=True)
@@ -236,7 +236,6 @@ def generar_pdf():
     pdf.cell(95, 5, f"Cuotas Pagadas: {cuotas_pagadas_actual} de {meses}", ln=True)
     pdf.ln(4)
     
-    # Seccion 2
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(*C_RGB_NAVY)
     pdf.cell(0, 6, "2. ESTADO ACTUAL DE LA DEUDA", ln=True)
@@ -249,12 +248,10 @@ def generar_pdf():
     pdf.cell(95, 5, f"Cuotas Pendientes: {meses - cuotas_pagadas_actual}", ln=True)
     pdf.ln(4)
     
-    # Seccion 3
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(*C_RGB_NAVY)
     pdf.cell(0, 6, "3. DESGLOSE FINANCIERO Y AUDITORIA DE AVANCE", ln=True)
     
-    # Encabezado de tabla en Azul Marino
     pdf.set_fill_color(*C_RGB_NAVY)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 8)
@@ -291,7 +288,6 @@ def generar_pdf():
         
     pdf.ln(5)
     
-    # Seccion 4
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(*C_RGB_NAVY)
     pdf.cell(0, 6, "4. PROYECCION SRI (INTERESES DEDUCIBLES)", ln=True)
@@ -406,7 +402,7 @@ with tab3:
                 meses_restantes = meses - mes_abono
                 tot_int_orig = df_base['Interes'].sum()
                 if tipo_beneficio == "Reducir Cuota":
-                    df_nuevo = generar_amortizacion(nuevo_saldo, meses_restantes, sistema, fecha_inicio + relativedelta(months=mes_abono))
+                    df_nuevo = generar_amortizacion(nuevo_saldo, meses_restantes, sistema, fecha_inicio + relativedelta(months=mes_abono), tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda)
                     nueva_cuota = df_nuevo.loc[0, 'Cuota_Total']
                     ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interes'].sum() + df_nuevo['Interes'].sum())
                     st.success(f"Tu nueva cuota baja a: **\\${nueva_cuota:,.2f}**")
@@ -417,7 +413,7 @@ with tab3:
                         n_meses = -np.log(1 - (nuevo_saldo * tasa_mes) / cuota_ref) / np.log(1 + tasa_mes)
                         n_meses = int(np.ceil(n_meses))
                         ahorrados = meses_restantes - n_meses
-                        df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono))
+                        df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono), tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda)
                         ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interes'].sum() + df_nuevo['Interes'].sum())
                         st.success(f"Terminas de pagar **{ahorrados} meses antes** (equivale a {ahorrados/12:.1f} anios).")
                         st.info(f"Ahorro estimado en intereses: **\\${ahorro:,.2f}**")
