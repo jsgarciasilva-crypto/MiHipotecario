@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -16,10 +16,7 @@ st.markdown("Monitorea tu crédito, marca tus cuotas canceladas y consérvalas e
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
-    # Lee la hoja configurada en Secrets (ttl=0 para ver cambios inmediatos)
     df_checks = conn.read(ttl=0)
-    
-    # Asegurar nombres de columnas limpios
     df_checks.columns = [str(c).strip() for c in df_checks.columns]
     
     if "Estado_Pago" in df_checks.columns:
@@ -29,7 +26,6 @@ try:
 
     if "Mes" not in df_checks.columns:
         df_checks["Mes"] = range(1, len(df_checks) + 1)
-
 except Exception as err:
     st.error(f"Aviso de conexión: {err}")
     df_checks = pd.DataFrame({"Mes": range(1, 241), "Estado_Pago": [False] * 240})
@@ -191,4 +187,18 @@ with tab3:
                     try:
                         n_meses = -np.log(1 - (nuevo_saldo * tasa_mes) / cuota_ref) / np.log(1 + tasa_mes)
                         n_meses = int(np.ceil(n_meses))
-                        ahorrados
+                        ahorrados = meses_restantes - n_meses
+                        df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono))
+                        ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interés ($)'].sum() + df_nuevo['Interés ($)'].sum())
+                        st.success(f"Terminas de pagar **{ahorrados} meses antes**.")
+                        st.info(f"Ahorro estimado en intereses: **${ahorro:,.2f}**")
+                    except Exception:
+                        st.info("El abono cubre la totalidad del crédito pendiente.")
+        else:
+            st.warning("No es posible realizar un abono en la última cuota.")
+
+with tab4:
+    st.subheader("🏛️ Proyección SRI (Intereses Deducibles)")
+    sri_df = df_base.groupby('Año Calendario')['Interés ($)'].sum().reset_index()
+    sri_df.columns = ['Año Fiscal', 'Intereses Deducibles ($)']
+    st.dataframe(sri_df.style.format({'Intereses Deducibles ($)': '${:,.2f}'}), use_container_width=True)
