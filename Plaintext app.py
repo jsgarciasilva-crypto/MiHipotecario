@@ -9,9 +9,61 @@ import requests
 from fpdf import FPDF
 from streamlit_gsheets import GSheetsConnection
 
-st.set_page_config(page_title="Mi Credito Produbanco", layout="wide", page_icon="🏦")
-st.title("🏦 Dashboard Hipotecario - Produbanco")
-st.markdown("Monitorea tu credito, simula estrategias de prepago, analiza costo de oportunidad y audita tu avance.")
+st.set_page_config(
+    page_title="Hipotecario Garcia Castillo", 
+    layout="wide", 
+    page_icon="🏛️"
+)
+
+# --- PALETA CORPORATIVA GARCIA ANDRADE ---
+COLOR_NAVY = "#0E2A47"
+COLOR_GOLD = "#C5A059"
+COLOR_BG_CARD = "#FFFFFF"
+
+# --- INYECCIÓN DE ESTILOS CSS PERSONALIZADOS ---
+st.markdown(f"""
+<style>
+    /* Titulo principal */
+    .header-title {{
+        color: {COLOR_NAVY};
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        margin-bottom: 2px;
+    }}
+    .header-sub {{
+        color: {COLOR_GOLD};
+        font-size: 1.05rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 20px;
+    }}
+    /* Botones principales */
+    .stButton>button, .stDownloadButton>button {{
+        background-color: {COLOR_NAVY} !important;
+        color: #FFFFFF !important;
+        border: 1px solid {COLOR_GOLD} !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        transition: all 0.3s ease !important;
+    }}
+    .stButton>button:hover, .stDownloadButton>button:hover {{
+        background-color: {COLOR_GOLD} !important;
+        color: {COLOR_NAVY} !important;
+        border: 1px solid {COLOR_NAVY} !important;
+    }}
+    /* Pestanas activas */
+    button[data-baseweb="tab"][aria-selected="true"] {{
+        border-bottom-color: {COLOR_GOLD} !important;
+        color: {COLOR_NAVY} !important;
+        font-weight: 700 !important;
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<h1 class="header-title">🏛️ Monitor Hipotecario</h1>', unsafe_allow_html=True)
+st.markdown('<p class="header-sub">Crédito Hipotecario Produbanco Familia García Castillo</p>', unsafe_allow_html=True)
 
 URL_HOJA = "https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing"
 URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec"
@@ -115,83 +167,143 @@ pct_int = (int_pagado / int_total * 100.0) if int_total > 0 else 0.0
 pct_seg = (seg_pagado / seg_total * 100.0) if seg_total > 0 else 0.0
 pct_tot = (tot_desembolsado / costo_total_credito * 100.0) if costo_total_credito > 0 else 0.0
 
-# Calculo de proximo pago
+# Calculo de proxima cuota y semaforo
 proximo_mes_idx = min(cuotas_pagadas_actual, meses - 1)
 fila_proxima = df_base.iloc[proximo_mes_idx]
 fecha_prox_dt = fecha_inicio + relativedelta(months=proximo_mes_idx)
 hoy = date.today()
 dias_restantes = (fecha_prox_dt - hoy).days
 
-# Banner superior de estatus
 col_b1, col_b2, col_b3 = st.columns(3)
 col_b1.metric("Proxima Cuota a Pagar", f"Mes {fila_proxima['Mes']} ({fila_proxima['Fecha']})")
 col_b2.metric("Valor a Debitar", f"${fila_proxima['Cuota_Total']:,.2f}")
 if dias_restantes > 0:
     col_b3.metric("Dias Restantes para Corte", f"{dias_restantes} dias", delta="A tiempo", delta_color="normal")
 elif dias_restantes == 0:
-    col_b3.metric("Dias Restantes para Corte", "HOY es dia de pago", delta="Atencion", delta_color="inverse")
+    col_b3.metric("Dias Restantes para Corte", "HOY es dia de corte", delta="Atencion", delta_color="inverse")
 else:
     col_b3.metric("Estado de Cuota", f"Corte paso hace {abs(dias_restantes)} dias", delta="Verificar pago", delta_color="inverse")
 
+# --- GENERADOR DEL PDF ESTILIZADO GARCIA ANDRADE ---
 def generar_pdf():
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
+    
+    C_RGB_NAVY = (14, 42, 71)
+    C_RGB_GOLD = (197, 160, 89)
+    C_RGB_TEXT = (45, 55, 72)
+    C_RGB_GRAY = (240, 243, 246)
+    
+    # Cenefa decorativa superior institucional
+    pdf.set_fill_color(*C_RGB_NAVY)
+    pdf.rect(10, 10, 190, 4, "F")
+    pdf.set_fill_color(*C_RGB_GOLD)
+    pdf.rect(10, 14, 190, 1.5, "F")
+    
+    pdf.set_y(20)
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, "ESTADO DE CUENTA HIPOTECARIO", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, f"Fecha de corte: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+    pdf.set_text_color(*C_RGB_NAVY)
+    pdf.cell(0, 8, "ESTADO DE CUENTA HIPOTECARIO", ln=True, align="C")
+    
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(*C_RGB_GOLD)
+    pdf.cell(0, 5, "CREDITO HIPOTECARIO PRODUBANCO FAMILIA GARCIA CASTILLO", ln=True, align="C")
+    
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(130, 140, 150)
+    pdf.cell(0, 5, f"Fecha de corte: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+    pdf.ln(4)
+    
+    # Linea dorada separadora
+    pdf.set_draw_color(*C_RGB_GOLD)
+    pdf.set_line_width(0.5)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
     pdf.ln(5)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "1. CONDICIONES DEL CREDITO", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(95, 6, f"Monto Financiado: ${monto:,.2f}")
-    pdf.cell(95, 6, f"Tasa Anual: {tasa_anual:.2f}%", ln=True)
-    pdf.cell(95, 6, f"Sistema: {sistema.split(' ')[0]}")
-    pdf.cell(95, 6, f"Plazo: {plazo_anios} anios ({meses} meses)", ln=True)
-    pdf.cell(95, 6, f"Fecha Primera Cuota: {fecha_inicio.strftime('%Y-%m-%d')}")
-    pdf.cell(95, 6, f"Cuotas Pagadas: {cuotas_pagadas_actual} de {meses}", ln=True)
-    pdf.ln(5)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "2. ESTADO ACTUAL DE LA DEUDA", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(95, 6, f"Saldo Deudor Actual: ${saldo_deudor:,.2f}")
-    pdf.cell(95, 6, f"Capital Pagado: ${cap_pagado:,.2f}", ln=True)
-    pdf.cell(95, 6, f"% Propiedad Pagado: {pct_cap:.2f}%")
-    pdf.cell(95, 6, f"Cuotas Pendientes: {meses - cuotas_pagadas_actual}", ln=True)
-    pdf.ln(5)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "3. DESGLOSE FINANCIERO Y AVANCE", ln=True)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_fill_color(230, 230, 230)
-    pdf.cell(40, 7, "Rubro", border=1, align="C", fill=True)
-    pdf.cell(38, 7, "Total Proyectado", border=1, align="C", fill=True)
-    pdf.cell(38, 7, "Pagado a Fecha", border=1, align="C", fill=True)
-    pdf.cell(38, 7, "Saldo Pendiente", border=1, align="C", fill=True)
-    pdf.cell(36, 7, "% Pagado", border=1, align="C", fill=True, ln=True)
+    
+    # Seccion 1
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*C_RGB_NAVY)
+    pdf.cell(0, 6, "1. CONDICIONES GENERALES DEL CREDITO", ln=True)
+    
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*C_RGB_TEXT)
+    pdf.cell(95, 5, f"Monto Financiado: ${monto:,.2f}")
+    pdf.cell(95, 5, f"Tasa Nominal Anual: {tasa_anual:.2f}%", ln=True)
+    pdf.cell(95, 5, f"Sistema: {sistema.split(' ')[0]}")
+    pdf.cell(95, 5, f"Plazo: {plazo_anios} anios ({meses} meses)", ln=True)
+    pdf.cell(95, 5, f"Fecha Primera Cuota: {fecha_inicio.strftime('%Y-%m-%d')}")
+    pdf.cell(95, 5, f"Cuotas Pagadas: {cuotas_pagadas_actual} de {meses}", ln=True)
+    pdf.ln(4)
+    
+    # Seccion 2
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*C_RGB_NAVY)
+    pdf.cell(0, 6, "2. ESTADO ACTUAL DE LA DEUDA", ln=True)
+    
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*C_RGB_TEXT)
+    pdf.cell(95, 5, f"Saldo Deudor Actual: ${saldo_deudor:,.2f}")
+    pdf.cell(95, 5, f"Capital Pagado: ${cap_pagado:,.2f}", ln=True)
+    pdf.cell(95, 5, f"% Propiedad Cancelado: {pct_cap:.2f}%")
+    pdf.cell(95, 5, f"Cuotas Pendientes: {meses - cuotas_pagadas_actual}", ln=True)
+    pdf.ln(4)
+    
+    # Seccion 3
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*C_RGB_NAVY)
+    pdf.cell(0, 6, "3. DESGLOSE FINANCIERO Y AUDITORIA DE AVANCE", ln=True)
+    
+    # Encabezado de tabla en Azul Marino
+    pdf.set_fill_color(*C_RGB_NAVY)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.cell(40, 6, "Rubro", border=1, align="C", fill=True)
+    pdf.cell(38, 6, "Total Proyectado", border=1, align="C", fill=True)
+    pdf.cell(38, 6, "Pagado a Fecha", border=1, align="C", fill=True)
+    pdf.cell(38, 6, "Saldo Pendiente", border=1, align="C", fill=True)
+    pdf.cell(36, 6, "% Pagado", border=1, align="C", fill=True, ln=True)
+    
     filas_pdf = [
         ("Capital", cap_total, cap_pagado, saldo_deudor, pct_cap),
         ("Intereses", int_total, int_pagado, int_pendiente, pct_int),
         ("Seguros", seg_total, seg_pagado, seg_pendiente, pct_seg),
         ("TOTAL GENERAL", costo_total_credito, tot_desembolsado, costo_pendiente, pct_tot)
     ]
+    
+    pdf.set_draw_color(210, 215, 225)
     for rubro, tot_v, pag_v, pend_v, p_v in filas_pdf:
-        est = "B" if rubro == "TOTAL GENERAL" else ""
-        pdf.set_font("Helvetica", est, 9)
-        pdf.cell(40, 6, rubro, border=1, align="L")
-        pdf.cell(38, 6, f"${tot_v:,.2f}", border=1, align="R")
-        pdf.cell(38, 6, f"${pag_v:,.2f}", border=1, align="R")
-        pdf.cell(38, 6, f"${pend_v:,.2f}", border=1, align="R")
-        pdf.cell(36, 6, f"{p_v:.1f}%", border=1, align="R", ln=True)
+        if rubro == "TOTAL GENERAL":
+            pdf.set_fill_color(*C_RGB_GRAY)
+            pdf.set_text_color(*C_RGB_NAVY)
+            pdf.set_font("Helvetica", "B", 8)
+            fill_flag = True
+        else:
+            pdf.set_text_color(*C_RGB_TEXT)
+            pdf.set_font("Helvetica", "", 8)
+            fill_flag = False
+            
+        pdf.cell(40, 5.5, rubro, border=1, align="L", fill=fill_flag)
+        pdf.cell(38, 5.5, f"${tot_v:,.2f}", border=1, align="R", fill=fill_flag)
+        pdf.cell(38, 5.5, f"${pag_v:,.2f}", border=1, align="R", fill=fill_flag)
+        pdf.cell(38, 5.5, f"${pend_v:,.2f}", border=1, align="R", fill=fill_flag)
+        pdf.cell(36, 5.5, f"{p_v:.1f}%", border=1, align="R", fill=fill_flag, ln=True)
+        
     pdf.ln(5)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "4. PROYECCION SRI (INTERESES DEDUCIBLES)", ln=True)
+    
+    # Seccion 4
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*C_RGB_NAVY)
+    pdf.cell(0, 6, "4. PROYECCION SRI (INTERESES DEDUCIBLES)", ln=True)
     pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*C_RGB_TEXT)
     sri_calc = df_base.groupby("Anio")["Interes"].sum().reset_index()
     for _, fila in sri_calc.iterrows():
         pdf.cell(60, 5, f"Ejercicio Fiscal {int(fila['Anio'])}:")
         pdf.cell(50, 5, f"${fila['Interes']:,.2f}", ln=True)
-    return bytes(pdf.output())
+        
+    out = pdf.output()
+    return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "☑️ Control de Pagos", 
@@ -230,7 +342,7 @@ with tab1:
                 try:
                     respuesta = requests.post(URL_PUENTE, json=lista_a_guardar, timeout=15)
                     st.cache_data.clear()
-                    st.success("Pagos actualizados y guardados!")
+                    st.success("Pagos actualizados y guardados con exito!")
                     st.rerun()
                 except Exception as err_puente:
                     st.error(f"Error al enviar datos: {err_puente}")
@@ -256,7 +368,7 @@ with tab2:
     st.markdown("---")
     st.markdown("#### Progreso de Titularidad del Inmueble")
     st.progress(min(100, int(pct_cap)))
-    st.caption(f"Tienes libre de hipoteca el **{pct_cap:.2f}%** del valor original.")
+    st.caption(f"Tienes libre de hipoteca el **{pct_cap:.2f}%** del valor original financiado.")
 
     st.markdown("---")
     st.markdown("#### Curva de Amortizacion: Descenso de Saldo Deudor")
@@ -266,10 +378,15 @@ with tab2:
         y="Saldo", 
         title="Proyeccion del Saldo Deudor en el Tiempo",
         labels={"Saldo": "Saldo Deudor ($)", "Mes": "Numero de Mes"},
-        color_discrete_sequence=["#1f77b4"]
+        color_discrete_sequence=[COLOR_NAVY]
     )
     if cuotas_pagadas_actual > 0:
-        fig_saldo.add_vline(x=cuotas_pagadas_actual, line_dash="dash", line_color="green", annotation_text="Punto Actual")
+        fig_saldo.add_vline(x=cuotas_pagadas_actual, line_dash="dash", line_color=COLOR_GOLD, annotation_text="Punto Actual")
+    fig_saldo.update_layout(
+        plot_bgcolor="#FFFFFF",
+        paper_bgcolor="#FFFFFF",
+        font=dict(color=COLOR_NAVY)
+    )
     st.plotly_chart(fig_saldo, use_container_width=True)
 
 with tab3:
@@ -292,8 +409,8 @@ with tab3:
                     df_nuevo = generar_amortizacion(nuevo_saldo, meses_restantes, sistema, fecha_inicio + relativedelta(months=mes_abono))
                     nueva_cuota = df_nuevo.loc[0, 'Cuota_Total']
                     ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interes'].sum() + df_nuevo['Interes'].sum())
-                    st.success(f"Tu nueva cuota baja a: **${nueva_cuota:,.2f}**")
-                    st.info(f"Ahorro estimado en intereses: **${ahorro:,.2f}**")
+                    st.success(f"Tu nueva cuota baja a: **\\${nueva_cuota:,.2f}**")
+                    st.info(f"Ahorro estimado en intereses: **\\${ahorro:,.2f}**")
                 else:
                     cuota_ref = df_base.loc[mes_abono, 'Capital'] + df_base.loc[mes_abono, 'Interes']
                     try:
@@ -303,7 +420,7 @@ with tab3:
                         df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono))
                         ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interes'].sum() + df_nuevo['Interes'].sum())
                         st.success(f"Terminas de pagar **{ahorrados} meses antes** (equivale a {ahorrados/12:.1f} anios).")
-                        st.info(f"Ahorro estimado en intereses: **${ahorro:,.2f}**")
+                        st.info(f"Ahorro estimado en intereses: **\\${ahorro:,.2f}**")
                     except Exception:
                         st.info("El abono cubre la totalidad del credito pendiente.")
         else:
@@ -383,6 +500,6 @@ with tab7:
     st.download_button(
         label="📥 Descargar Estado de Cuenta (PDF)",
         data=pdf_bytes,
-        file_name=f"Estado_Credito_{datetime.now().strftime('%Y%m%d')}.pdf",
+        file_name=f"Estado_Credito_Produbanco_GarciaCastillo_{datetime.now().strftime('%Y%m%d')}.pdf",
         mime="application/pdf"
     )
