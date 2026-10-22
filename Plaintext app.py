@@ -345,7 +345,7 @@ with tab4:
     cs2.metric("Ahorro Total en Intereses", f"${ahorro_interes_snow:,.2f}")
     cs3.metric("Nuevo Mes Final", f"Mes {mes_actual_sim} de {meses}")
     
-    st.info(f"💡 Al aportar **${micro_abono:,.2f} extra cada mes**, cancelas tu deuda en **{mes_actual_sim - cuotas_pagadas_actual} meses mas** en lugar de {meses - cuotas_pagadas_actual} meses restantes.")
+    st.info(f"💡 Al aportar **\\${micro_abono:,.2f} extra cada mes**, cancelas tu deuda en **{mes_actual_sim - cuotas_pagadas_actual} meses mas** en lugar de {meses - cuotas_pagadas_actual} meses restantes.")
 
 with tab5:
     st.subheader("⚖️ Analisis Financiero: Prepagar Credito vs Invertir en Poliza")
@@ -366,9 +366,9 @@ with tab5:
     col_m3.metric("Diferencial Financiero", f"{abs(diff_tasa):.2f}%", delta="Ventaja Prepago" if diff_tasa > 0 else "Ventaja Inversion")
     
     if diff_tasa > 0:
-        st.success(f"🏆 **Conviene PREPAGAR el credito:** El costo de tu deuda ({tasa_costo_efectivo:.2f}%) supera el rendimiento de la inversion ({tasa_inversion:.2f}%). Al abonar ${capital_analisis:,.2f} al credito te ahorras **${ahorro_anual_credito:,.2f}/anio**, mientras que invirtiendolo ganarias solo **${ganancia_anual_inversion:,.2f}/anio**.")
+        st.success(f"🏆 **Conviene PREPAGAR el credito:** El costo de tu deuda ({tasa_costo_efectivo:.2f}%) supera el rendimiento de la inversion ({tasa_inversion:.2f}%). Al abonar \\${capital_analisis:,.2f} al credito te ahorras **\\${ahorro_anual_credito:,.2f}/anio**, mientras que invirtiendolo ganarias solo **\\${ganancia_anual_inversion:,.2f}/anio**.")
     else:
-        st.warning(f"📈 **Conviene INVERTIR:** La inversion rinde ({tasa_inversion:.2f}%), superando el costo del credito ({tasa_costo_efectivo:.2f}%). Tu dinero crece mas rapido invertido.")
+        st.warning(f"📈 **Conviene INVERTIR:** La inversion rinde ({tasa_inversion:.2f}%), superando el costo del credito ({tasa_costo_efectivo:.2f}%). Al invertir \\${capital_analisis:,.2f} generas mas rendimiento de lo que te cuesta el credito.")
 
 with tab6:
     st.subheader("🏛️ Proyeccion SRI (Intereses Deducibles)")
