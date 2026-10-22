@@ -81,7 +81,6 @@ if "datos_cargados" not in st.session_state:
             if len(pagos) < 240:
                 pagos.extend([False] * (240 - len(pagos)))
                 
-        # Cargar abonos históricos registrados en Google Sheets
         if "Abono_Extra" in df_sheet.columns and "Tipo_Abono" in df_sheet.columns:
             for idx, fila in df_sheet.iterrows():
                 try:
@@ -219,7 +218,7 @@ meses_ahorrados_totales = max(0, len(df_original) - len(df_base))
 ahorro_intereses_total = max(0.0, df_original["Interes"].sum() - df_base["Interes"].sum())
 total_abonado_capital = sum(v["monto"] for v in st.session_state["abonos_guardados"].values())
 
-# Función para sincronizar Cronograma Completo (7 Columnas) a Google Sheets
+# Función para guardar datos
 def guardar_en_nube():
     payload = []
     for _, fila in df_base.iterrows():
@@ -228,7 +227,6 @@ def guardar_en_nube():
         info_ab = st.session_state["abonos_guardados"].get(m_num, None)
         ab_monto = float(info_ab["monto"]) if info_ab else 0.0
         ab_tipo = str(info_ab["tipo"]) if info_ab else ""
-        
         payload.append({
             "mes": m_num,
             "fecha": str(fila["Fecha"]),
@@ -241,9 +239,9 @@ def guardar_en_nube():
     try:
         url_destino = URL_PUENTE.strip()
         requests.post(url_destino, json=payload, timeout=15)
-        st.success("¡Cronograma completo (7 columnas) guardado con éxito en Google Sheets!")
+        st.success("¡Datos guardados con éxito!")
     except Exception as err:
-        st.error(f"Error al enviar datos: {err}")
+        st.error(f"Error al guardar datos: {err}")
 
 # Cantidad de pagos actualizada al instante
 cuotas_pagadas_actual = min(sum(st.session_state["pagos_lista"]), meses_totales)
@@ -443,8 +441,8 @@ with tab1:
     col_t1, col_t2 = st.columns([3, 1])
     col_t1.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses_totales}** | Saldo Deudor: **\\${saldo_deudor:,.2f}**")
     
-    if col_t2.button("💾 Guardar en la Nube", key="btn_save_top"):
-        with st.spinner("Guardando cronograma completo en Google Sheets..."):
+    if col_t2.button("💾 Guardar Cambios", key="btn_save_top"):
+        with st.spinner("Guardando datos..."):
             guardar_en_nube()
 
     anios_max = int(np.ceil(meses_totales / 12.0))
@@ -478,8 +476,8 @@ with tab1:
         c4.markdown("✅ *Pagado*" if valor_actual else "⏳ *Pendiente*")
         st.divider()
         
-    if st.button("💾 Guardar Cambios en Google Sheets", key="btn_save_bottom"):
-        with st.spinner("Guardando cronograma completo en Google Sheets..."):
+    if st.button("💾 Guardar Cambios", key="btn_save_bottom"):
+        with st.spinner("Guardando datos..."):
             guardar_en_nube()
 
 with tab2:
@@ -608,7 +606,7 @@ with tab3:
     
     subtab_sim, subtab_real = st.tabs([
         "🧪 1. Simulador de Escenarios (Sin alterar el crédito)", 
-        "🏛️ 2. Abonos Reales Aplicados (Histórico en Nube)"
+        "🏛️ 2. Abonos Reales Aplicados (Historial)"
     ])
     
     # --- SUBTAB 1: SIMULADOR HIPOTÉTICO ---
@@ -661,7 +659,7 @@ with tab3:
     # --- SUBTAB 2: ABONOS REALES Y BITÁCORA ---
     with subtab_real:
         st.markdown("#### 🏛️ Bitácora y Registro de Abonos Reales")
-        st.caption("Abonos confirmados que impactan permanentemente todo el dashboard y se sincronizan en la nube.")
+        st.caption("Abonos confirmados que impactan permanentemente todo el dashboard y quedan guardados.")
         
         with st.expander("➕ **Registrar Nuevo Abono Real Directo**", expanded=False):
             col_reg1, col_reg2, col_reg3, col_reg4 = st.columns([1.5, 2, 2, 1.5])
@@ -674,7 +672,7 @@ with tab3:
             fecha_proyectada = fecha_inicio + relativedelta(months=int(nuevo_mes - 1))
             col_reg4.write(f"📅 Fecha: **{fecha_proyectada.strftime('%Y-%m')}**")
             
-            if st.button("➕ Confirmar y Guardar Abono Real en la Nube", key="btn_agregar_abono_real"):
+            if st.button("➕ Confirmar y Guardar Abono Real", key="btn_agregar_abono_real"):
                 st.session_state["abonos_guardados"][int(nuevo_mes)] = {
                     "monto": float(nuevo_monto),
                     "tipo": nuevo_tipo
