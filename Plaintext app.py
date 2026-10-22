@@ -12,11 +12,15 @@ st.set_page_config(page_title="Mi Crédito Produbanco", layout="wide", page_icon
 st.title("🏦 Dashboard Hipotecario - Produbanco")
 st.markdown("Monitorea tu crédito, marca tus cuotas canceladas y consérvalas en la nube.")
 
+# --- ENLACE DIRECTO A TU GOOGLE SHEET ---
+URL_HOJA = "https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing"
+
 # --- CONEXIÓN CON GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
-    df_checks = conn.read(ttl=0)
+    # Leemos indicando la URL directamente
+    df_checks = conn.read(spreadsheet=URL_HOJA, ttl=0)
     df_checks.columns = [str(c).strip() for c in df_checks.columns]
     
     if "Estado_Pago" in df_checks.columns:
@@ -139,7 +143,7 @@ with tab1:
                 df_guardar["Estado_Pago"] = estados_modificados
                 df_guardar["Estado_Pago"] = df_guardar["Estado_Pago"].apply(lambda x: "TRUE" if x else "FALSE")
                 
-                conn.update(data=df_guardar)
+                conn.update(spreadsheet=URL_HOJA, data=df_guardar)
                 st.cache_data.clear()
             st.success("¡Pagos actualizados y guardados con éxito!")
             st.rerun()
