@@ -83,7 +83,7 @@ if "datos_cargados" not in st.session_state:
             if len(pagos) < 240:
                 pagos.extend([False] * (240 - len(pagos)))
                 
-        # 2. Cargar abonos históricos
+        # 2. Cargar abonos históricos registrados en Google Sheets
         if "Abono_Extra" in df_sheet.columns and "Tipo_Abono" in df_sheet.columns:
             for idx, fila in df_sheet.iterrows():
                 try:
@@ -126,6 +126,33 @@ if "reajustes_tasa" not in st.session_state:
 
 def actualizar_check(idx):
     st.session_state["pagos_lista"][idx] = st.session_state[f"chk_{idx}"]
+
+# Función para sincronizar Cronograma Completo (8 Columnas) a Google Sheets
+def guardar_en_nube():
+    payload = []
+    for _, fila in df_base.iterrows():
+        m_num = int(fila["Mes"])
+        esta_pag = bool(st.session_state["pagos_lista"][m_num - 1]) if (m_num - 1) < len(st.session_state["pagos_lista"]) else False
+        info_ab = st.session_state["abonos_guardados"].get(m_num, None)
+        ab_monto = float(info_ab["monto"]) if info_ab else 0.0
+        ab_tipo = str(info_ab["tipo"]) if info_ab else ""
+        
+        payload.append({
+            "mes": m_num,
+            "fecha": str(fila["Fecha"]),
+            "cuota": float(fila["Cuota_Total"]),
+            "pagado": esta_pag,
+            "abono": ab_monto,
+            "tipo": ab_tipo,
+            "saldo": float(fila["Saldo"]),
+            "tasa": float(fila["Tasa_Anual"])
+        })
+    try:
+        url_destino = URL_PUENTE.strip()
+        requests.post(url_destino, json=payload, timeout=15)
+        st.success("¡Datos guardados con éxito!")
+    except Exception as err:
+        st.error(f"Error al guardar datos: {err}")
 
 # --- BARRA LATERAL DINÁMICA ---
 with st.sidebar:
@@ -271,33 +298,6 @@ meses_totales = len(df_base)
 meses_ahorrados_totales = max(0, len(df_original) - len(df_base))
 ahorro_intereses_total = max(0.0, df_original["Interes"].sum() - df_base["Interes"].sum())
 total_abonado_capital = sum(v["monto"] for v in st.session_state["abonos_guardados"].values())
-
-# Función para sincronizar Cronograma Completo (8 Columnas)
-def guardar_en_nube():
-    payload = []
-    for _, fila in df_base.iterrows():
-        m_num = int(fila["Mes"])
-        esta_pag = bool(st.session_state["pagos_lista"][m_num - 1]) if (m_num - 1) < len(st.session_state["pagos_lista"]) else False
-        info_ab = st.session_state["abonos_guardados"].get(m_num, None)
-        ab_monto = float(info_ab["monto"]) if info_ab else 0.0
-        ab_tipo = str(info_ab["tipo"]) if info_ab else ""
-        
-        payload.append({
-            "mes": m_num,
-            "fecha": str(fila["Fecha"]),
-            "cuota": float(fila["Cuota_Total"]),
-            "pagado": esta_pag,
-            "abono": ab_monto,
-            "tipo": ab_tipo,
-            "saldo": float(fila["Saldo"]),
-            "tasa": float(fila["Tasa_Anual"])
-        })
-    try:
-        url_destino = URL_PUENTE.strip()
-        requests.post(url_destino, json=payload, timeout=15)
-        st.success("¡Datos guardados con éxito!")
-    except Exception as err:
-        st.error(f"Error al guardar datos: {err}")
 
 # Cantidad de pagos actualizada al instante
 cuotas_pagadas_actual = min(sum(st.session_state["pagos_lista"]), meses_totales)
@@ -480,12 +480,11 @@ def generar_pdf():
     out = pdf.output()
     return out.encode('latin-1') if isinstance(out, str) else bytes(out)
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "☑️ Control de Pagos", 
     "📊 Avance y Graficos", 
     "💸 Abonos a Capital",
     "❄️ Micro-Abonos (Bola de Nieve)",
-    "⚖️ Prepago vs Inversion",
     "📈 SRI", 
     "📄 Reporte PDF"
 ])
@@ -493,7 +492,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 with tab1:
     st.subheader("Registro de Cuotas Canceladas")
     
-    # Módulo para Reajuste Semestral de Tasa
+    # 1. Módulo para Reajuste Semestral de Tasa
     with st.expander("🔄 **Reajustes Semestrales de Tasa de Interés (Año 2 en adelante)**", expanded=False):
         st.markdown("El crédito mantiene una tasa fija durante el primer año (Meses 1 a 12). A partir del Mes 13, Produbanco reajusta la tasa semestralmente.")
         
@@ -859,35 +858,12 @@ with tab4:
     st.info(f"💡 Al aportar **\\${micro_abono:,.2f} extra cada mes**, cancelas tu deuda en **{mes_actual_sim - cuotas_pagadas_actual} meses mas** en lugar de {cuotas_restantes} meses restantes.")
 
 with tab5:
-    st.subheader("⚖️ Analisis Financiero: Prepagar Credito vs Invertir en Poliza")
-    st.markdown("Compara el costo de tu deuda frente al rendimiento de depositar tu dinero en una poliza o fondo.")
-    
-    tasa_costo_efectivo = tasa_anual + tasa_desgravamen + tasa_incendio
-    col_inv1, col_inv2 = st.columns(2)
-    tasa_inversion = col_inv1.number_input("Rendimiento anual estimado de tu inversion / poliza (%)", value=8.5, step=0.25)
-    capital_analisis = col_inv2.number_input("Monto de capital disponible para evaluar ($)", value=5000.0, step=500.0)
-    
-    diff_tasa = tasa_costo_efectivo - tasa_inversion
-    ahorro_anual_credito = capital_analisis * (tasa_costo_efectivo / 100.0)
-    ganancia_anual_inversion = capital_analisis * (tasa_inversion / 100.0)
-    
-    col_m1, col_m2, col_m3 = st.columns(3)
-    col_m1.metric("Costo Total Deuda (Tasa + Seguros)", f"{tasa_costo_efectivo:.2f}%")
-    col_m2.metric("Rendimiento Inversion", f"{tasa_inversion:.2f}%")
-    col_m3.metric("Diferencial Financiero", f"{abs(diff_tasa):.2f}%", delta="Ventaja Prepago" if diff_tasa > 0 else "Ventaja Inversion")
-    
-    if diff_tasa > 0:
-        st.success(f"🏆 **Conviene PREPAGAR el credito:** El costo de tu deuda ({tasa_costo_efectivo:.2f}%) supera el rendimiento de la inversion ({tasa_inversion:.2f}%). Al abonar \\${capital_analisis:,.2f} al credito te ahorras **\\${ahorro_anual_credito:,.2f}/anio**, mientras que invirtiendolo ganarias solo **\\${ganancia_anual_inversion:,.2f}/anio**.")
-    else:
-        st.warning(f"📈 **Conviene INVERTIR:** La inversion rinde ({tasa_inversion:.2f}%), superando el costo del credito ({tasa_costo_efectivo:.2f}%). Al invertir \\${capital_analisis:,.2f} generas mas rendimiento de lo que te cuesta el credito.")
-
-with tab6:
     st.subheader("🏛️ Proyeccion SRI (Intereses Deducibles)")
     sri_df = df_base.groupby('Anio')['Interes'].sum().reset_index()
     sri_df.columns = ['Anio Fiscal', 'Intereses Deducibles ($)']
     st.dataframe(sri_df.style.format({'Intereses Deducibles ($)': '${:,.2f}'}), use_container_width=True)
 
-with tab7:
+with tab6:
     st.subheader("📄 Reporte Ejecutivo en PDF")
     st.markdown("Descarga un informe detallado con el corte actual de amortizacion, saldos e intereses.")
     pdf_bytes = generar_pdf()
