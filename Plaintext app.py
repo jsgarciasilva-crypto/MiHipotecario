@@ -67,25 +67,31 @@ URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUd
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-try:
-    df_checks = conn.read(spreadsheet=URL_HOJA, ttl=0)
-    df_checks.columns = [str(c).strip() for c in df_checks.columns]
-    if "Estado_Pago" in df_checks.columns:
-        df_checks["Estado_Pago"] = df_checks["Estado_Pago"].astype(str).str.strip().str.upper().isin(["TRUE", "VERDADERO", "1"])
-    else:
-        df_checks["Estado_Pago"] = False
-    if "Mes" not in df_checks.columns:
-        df_checks["Mes"] = range(1, len(df_checks) + 1)
-except Exception as err:
-    st.error(f"Aviso de conexion: {err}")
-    df_checks = pd.DataFrame({"Mes": range(1, 241), "Estado_Pago": [False] * 240})
+# Inicializacion persistente y reactiva de los pagos
+if "pagos_lista" not in st.session_state:
+    try:
+        df_sheet = conn.read(spreadsheet=URL_HOJA, ttl=0)
+        df_sheet.columns = [str(c).strip() for c in df_sheet.columns]
+        if "Estado_Pago" in df_sheet.columns:
+            pagos = df_sheet["Estado_Pago"].astype(str).str.strip().str.upper().isin(["TRUE", "VERDADERO", "1"]).tolist()
+        else:
+            pagos = [False] * 240
+    except Exception:
+        pagos = [False] * 240
+        
+    if len(pagos) < 240:
+        pagos.extend([False] * (240 - len(pagos)))
+    st.session_state["pagos_lista"] = pagos[:240]
 
-# --- BARRA LATERAL DINÁMICA (CADA CAMBIO RECALCULA TODO EN TIEMPO REAL) ---
+def actualizar_check(idx):
+    st.session_state["pagos_lista"][idx] = st.session_state[f"chk_{idx}"]
+
+# --- BARRA LATERAL DINAMICA ---
 with st.sidebar:
     st.header("1. Datos del Credito")
-    fecha_inicio = st.date_input("Fecha inicio / primera cuota", datetime(2023, 1, 15))
+    fecha_inicio = st.date_input("Fecha inicio / primera cuota", date(2026, 12, 1))
     valor_vivienda = st.number_input("Valor casa ($)", value=315000.0, step=5000.0)
-    monto = st.number_input("Monto Financiado ($)", value=230000.0, step=1000.0)
+    monto = st.number_input("Monto Financiado ($)", value=240000.0, step=1000.0)
     tasa_anual = st.number_input("Tasa Anual (%)", value=6.5, step=0.1)
     plazo_anios = st.number_input("Plazo (Anios)", value=20, step=1)
     
@@ -96,13 +102,12 @@ with st.sidebar:
     st.header("3. Sistema")
     sistema = st.selectbox("Sistema Amortizacion", ["Frances (Cuota Fija)", "Aleman (Capital Fijo)"])
 
-# Parámetros calculados en caliente según lo ingresado en la barra lateral
+# Parametros calculados en caliente
 meses = int(plazo_anios * 12)
 tasa_mes = (tasa_anual / 100.0) / 12.0
 tasa_desg_mes = (tasa_desgravamen / 100.0) / 12.0
 cuota_incendio = (valor_vivienda * (tasa_incendio / 100.0)) / 12.0
 
-# Función pura de amortización sin caché para respuesta dinámica inmediata
 def generar_amortizacion(monto_val, plazo_val, sistema_val, fecha_val, t_anual_val, t_desg_val, t_inc_val, v_casa_val):
     tabla = []
     saldo = float(monto_val)
@@ -139,10 +144,10 @@ def generar_amortizacion(monto_val, plazo_val, sistema_val, fecha_val, t_anual_v
         })
     return pd.DataFrame(tabla)
 
-# Se recalcula la tabla entera al instante con cualquier cambio del usuario
 df_base = generar_amortizacion(monto, meses, sistema, fecha_inicio, tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda)
 
-cuotas_pagadas_actual = int(df_checks["Estado_Pago"].sum())
+# Cantidad de pagos actualizada al instante
+cuotas_pagadas_actual = sum(st.session_state["pagos_lista"])
 
 if cuotas_pagadas_actual > 0 and cuotas_pagadas_actual <= len(df_base):
     df_pagado = df_base.iloc[:cuotas_pagadas_actual]
@@ -171,7 +176,7 @@ pct_int = (int_pagado / int_total * 100.0) if int_total > 0 else 0.0
 pct_seg = (seg_pagado / seg_total * 100.0) if seg_total > 0 else 0.0
 pct_tot = (tot_desembolsado / costo_total_credito * 100.0) if costo_total_credito > 0 else 0.0
 
-# Cálculo dinámico de próxima cuota y semáforo
+# Calculo de proxima cuota y semaforo en tiempo real
 proximo_mes_idx = min(cuotas_pagadas_actual, meses - 1)
 fila_proxima = df_base.iloc[proximo_mes_idx]
 fecha_prox_dt = fecha_inicio + relativedelta(months=proximo_mes_idx)
@@ -313,35 +318,48 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 
 with tab1:
     st.subheader("Registro de Cuotas Canceladas")
-    st.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses}** | Saldo Deudor: **${saldo_deudor:,.2f}**")
+    
+    col_t1, col_t2 = st.columns([3, 1])
+    col_t1.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses}** | Saldo Deudor: **${saldo_deudor:,.2f}**")
+    
+    if col_t2.button("💾 Guardar en la Nube", key="btn_save_top"):
+        with st.spinner("Guardando permanentemente en Google Sheets..."):
+            try:
+                requests.post(URL_PUENTE, json=st.session_state["pagos_lista"], timeout=15)
+                st.success("¡Datos guardados con éxito en Google Sheets!")
+            except Exception as err_puente:
+                st.error(f"Error al enviar datos: {err_puente}")
+
     anios_credito = list(range(1, int(plazo_anios) + 1))
     anio_seleccionado = st.selectbox("Selecciona el Anio del Credito:", anios_credito)
     mes_inicio_vista = (anio_seleccionado - 1) * 12
     mes_fin_vista = min(anio_seleccionado * 12, meses)
     st.markdown("---")
-    with st.form("formulario_pagos"):
-        estados_modificados = df_checks["Estado_Pago"].copy()
-        for i in range(mes_inicio_vista, mes_fin_vista):
-            fila = df_base.iloc[i]
-            c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
-            valor_actual = bool(df_checks.loc[i, "Estado_Pago"]) if i < len(df_checks) else False
-            check = c1.checkbox(f"Mes {fila['Mes']}", value=valor_actual, key=f"pago_chk_{i}")
-            estados_modificados[i] = check
-            c2.write(f"📅 **{fila['Fecha']}**")
-            c3.write(f"💵 **Cuota:** ${fila['Cuota_Total']:,.2f}")
-            c4.markdown("✅ *Pagado*" if check else "⏳ *Pendiente*")
-            st.divider()
-        boton_guardar = st.form_submit_button("💾 Guardar Cambios en Google Sheets")
-        if boton_guardar:
-            with st.spinner("Guardando cambios en Google Sheets..."):
-                lista_a_guardar = [bool(x) for x in estados_modificados.tolist()]
-                try:
-                    respuesta = requests.post(URL_PUENTE, json=lista_a_guardar, timeout=15)
-                    st.cache_data.clear()
-                    st.success("Pagos actualizados y guardados con exito!")
-                    st.rerun()
-                except Exception as err_puente:
-                    st.error(f"Error al enviar datos: {err_puente}")
+    
+    for i in range(mes_inicio_vista, mes_fin_vista):
+        fila = df_base.iloc[i]
+        c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
+        valor_actual = st.session_state["pagos_lista"][i]
+        
+        check = c1.checkbox(
+            f"Mes {fila['Mes']}", 
+            value=valor_actual, 
+            key=f"chk_{i}", 
+            on_change=actualizar_check, 
+            args=(i,)
+        )
+        c2.write(f"📅 **{fila['Fecha']}**")
+        c3.write(f"💵 **Cuota:** ${fila['Cuota_Total']:,.2f}")
+        c4.markdown("✅ *Pagado*" if valor_actual else "⏳ *Pendiente*")
+        st.divider()
+        
+    if st.button("💾 Guardar Cambios en Google Sheets", key="btn_save_bottom"):
+        with st.spinner("Guardando permanentemente en Google Sheets..."):
+            try:
+                requests.post(URL_PUENTE, json=st.session_state["pagos_lista"], timeout=15)
+                st.success("¡Datos guardados con éxito en Google Sheets!")
+            except Exception as err_puente:
+                st.error(f"Error al enviar datos: {err_puente}")
 
 with tab2:
     st.subheader("Auditoria de Pagos y Porcentajes de Avance")
