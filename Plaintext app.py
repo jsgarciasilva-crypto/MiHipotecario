@@ -168,7 +168,6 @@ def generar_pdf():
     pdf.cell(38, 7, "Saldo Pendiente", 1, 0, "C", fill=True)
     pdf.cell(36, 7, "% Pagado", 1, 1, "C", fill=True)
     
-    pdf.set_font("Helvetica", "", 9)
     datos_tabla = [
         ("Capital", cap_total, cap_pagado, saldo_deudor, pct_cap),
         ("Intereses", int_total, int_pagado, int_pendiente, pct_int),
@@ -181,75 +180,4 @@ def generar_pdf():
         pdf.set_font("Helvetica", bold_flag, 9)
         pdf.cell(40, 6, r, 1, 0, "L")
         pdf.cell(38, 6, f"${tot:,.2f}", 1, 0, "R")
-        pdf.cell(38, 6, f"${pag:,.2f}", 1, 0, "R")
-        pdf.cell(38, 6, f"${sal:,.2f}", 1, 0, "R")
-        pdf.cell(36, 6, f"{p:.1f}%", 1, 1, "R")
-        
-    pdf.ln(8)
-    
-    # Proyección SRI
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "4. PROYECCION DE INTERESES DEDUCIBLES (SRI)", ln=True)
-    pdf.set_font("Helvetica", "", 9)
-    sri_calc = df_base.groupby("Año Calendario")["Interés ($)"].sum().reset_index()
-    for _, fila in sri_calc.iterrows():
-        pdf.cell(60, 5, f"Ejercicio Fiscal {int(fila['Año Calendario'])}:", border=0)
-        pdf.cell(50, 5, f"${fila['Interés ($)']:,.2f}", border=0, ln=True)
-        
-    return bytes(pdf.output())
-
-# --- PESTAÑAS DE NAVEGACIÓN ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "☑️ Control de Pagos", 
-    "📊 Avance y Rubros", 
-    "💸 Abonos Extra", 
-    "📈 SRI", 
-    "📄 Reporte PDF"
-])
-
-with tab1:
-    st.subheader("Registro de Cuotas Canceladas")
-    st.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses}** | Saldo Deudor: **${saldo_deudor:,.2f}**")
-    
-    anios_credito = list(range(1, int(plazo_anios) + 1))
-    anio_seleccionado = st.selectbox("Selecciona el Año del Crédito:", anios_credito)
-    
-    mes_inicio_vista = (anio_seleccionado - 1) * 12
-    mes_fin_vista = min(anio_seleccionado * 12, meses)
-    
-    st.markdown("---")
-    
-    with st.form("formulario_pagos"):
-        estados_modificados = df_checks["Estado_Pago"].copy()
-        
-        for i in range(mes_inicio_vista, mes_fin_vista):
-            fila = df_base.iloc[i]
-            c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
-            
-            valor_actual = bool(df_checks.loc[i, "Estado_Pago"]) if i < len(df_checks) else False
-            
-            check = c1.checkbox(f"Mes {fila['Mes']}", value=valor_actual, key=f"pago_chk_{i}")
-            estados_modificados[i] = check
-            
-            c2.write(f"📅 **{fila['Fecha']}**")
-            c3.write(f"💵 **Cuota:** ${fila['Cuota Total ($)']:,.2f}")
-            c4.markdown("✅ *Pagado*" if check else "⏳ *Pendiente*")
-            st.divider()
-        
-        boton_guardar = st.form_submit_button("💾 Guardar Cambios en Google Sheets")
-        
-        if boton_guardar:
-            with st.spinner("Guardando cambios en Google Sheets..."):
-                lista_a_guardar = [bool(x) for x in estados_modificados.tolist()]
-                try:
-                    respuesta = requests.post(URL_PUENTE, json=lista_a_guardar, timeout=15)
-                    st.cache_data.clear()
-                    st.success("¡Pagos actualizados y guardados con éxito!")
-                    st.rerun()
-                except Exception as err_puente:
-                    st.error(f"Error al enviar datos: {err_puente}")
-
-with tab2:
-    st.subheader("Auditoría de Pagos y Porcentajes de Avance")
-    
-    c1, c2, c3, c4 = st
+        pdf.cell(38, 6, f"${pag:,.2f}", 1,
