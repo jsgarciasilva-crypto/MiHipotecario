@@ -105,27 +105,6 @@ if "datos_cargados" not in st.session_state:
 def actualizar_check(idx):
     st.session_state["pagos_lista"][idx] = st.session_state[f"chk_{idx}"]
 
-# Función para sincronizar Pagos + Abonos a Google Sheets
-def guardar_en_nube():
-    payload = []
-    for m in range(1, 241):
-        esta_pag = bool(st.session_state["pagos_lista"][m - 1]) if (m - 1) < len(st.session_state["pagos_lista"]) else False
-        info_ab = st.session_state["abonos_guardados"].get(m, None)
-        ab_monto = float(info_ab["monto"]) if info_ab else 0.0
-        ab_tipo = str(info_ab["tipo"]) if info_ab else ""
-        payload.append({
-            "mes": m,
-            "pagado": esta_pag,
-            "abono": ab_monto,
-            "tipo": ab_tipo
-        })
-    try:
-        url_destino = URL_PUENTE.strip()
-        requests.post(url_destino, json=payload, timeout=15)
-        st.success("¡Datos y abonos guardados con éxito en Google Sheets!")
-    except Exception as err:
-        st.error(f"Error al enviar datos: {err}")
-
 # --- BARRA LATERAL DINÁMICA ---
 with st.sidebar:
     st.header("1. Datos del Credito")
@@ -239,6 +218,32 @@ meses_totales = len(df_base)
 meses_ahorrados_totales = max(0, len(df_original) - len(df_base))
 ahorro_intereses_total = max(0.0, df_original["Interes"].sum() - df_base["Interes"].sum())
 total_abonado_capital = sum(v["monto"] for v in st.session_state["abonos_guardados"].values())
+
+# Función para sincronizar Cronograma Completo (7 Columnas) a Google Sheets
+def guardar_en_nube():
+    payload = []
+    for _, fila in df_base.iterrows():
+        m_num = int(fila["Mes"])
+        esta_pag = bool(st.session_state["pagos_lista"][m_num - 1]) if (m_num - 1) < len(st.session_state["pagos_lista"]) else False
+        info_ab = st.session_state["abonos_guardados"].get(m_num, None)
+        ab_monto = float(info_ab["monto"]) if info_ab else 0.0
+        ab_tipo = str(info_ab["tipo"]) if info_ab else ""
+        
+        payload.append({
+            "mes": m_num,
+            "fecha": str(fila["Fecha"]),
+            "cuota": float(fila["Cuota_Total"]),
+            "pagado": esta_pag,
+            "abono": ab_monto,
+            "tipo": ab_tipo,
+            "saldo": float(fila["Saldo"])
+        })
+    try:
+        url_destino = URL_PUENTE.strip()
+        requests.post(url_destino, json=payload, timeout=15)
+        st.success("¡Cronograma completo (7 columnas) guardado con éxito en Google Sheets!")
+    except Exception as err:
+        st.error(f"Error al enviar datos: {err}")
 
 # Cantidad de pagos actualizada al instante
 cuotas_pagadas_actual = min(sum(st.session_state["pagos_lista"]), meses_totales)
@@ -439,7 +444,7 @@ with tab1:
     col_t1.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses_totales}** | Saldo Deudor: **\\${saldo_deudor:,.2f}**")
     
     if col_t2.button("💾 Guardar en la Nube", key="btn_save_top"):
-        with st.spinner("Guardando permanentemente en Google Sheets..."):
+        with st.spinner("Guardando cronograma completo en Google Sheets..."):
             guardar_en_nube()
 
     anios_max = int(np.ceil(meses_totales / 12.0))
@@ -474,7 +479,7 @@ with tab1:
         st.divider()
         
     if st.button("💾 Guardar Cambios en Google Sheets", key="btn_save_bottom"):
-        with st.spinner("Guardando permanentemente en Google Sheets..."):
+        with st.spinner("Guardando cronograma completo en Google Sheets..."):
             guardar_en_nube()
 
 with tab2:
@@ -617,7 +622,6 @@ with tab3:
         sim_monto = col_s2.number_input("Monto a simular ($)", min_value=100.0, value=30000.0, step=1000.0, key="sim_input_monto")
         sim_tipo = col_s3.radio("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], key="sim_input_tipo")
         
-        # Diccionario temporal que combina los abonos reales existentes + el abono hipotético
         dict_temp = dict(st.session_state["abonos_guardados"])
         dict_temp[int(sim_mes)] = {"monto": float(sim_monto), "tipo": sim_tipo}
         
@@ -668,7 +672,7 @@ with tab3:
             nuevo_tipo = col_reg3.selectbox("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], key="real_nuevo_tipo")
             
             fecha_proyectada = fecha_inicio + relativedelta(months=int(nuevo_mes - 1))
-            col_reg4.write(f"📅 Fecha cuota:\n**{fecha_proyectada.strftime('%Y-%m')}**")
+            col_reg4.write(f"📅 Fecha: **{fecha_proyectada.strftime('%Y-%m')}**")
             
             if st.button("➕ Confirmar y Guardar Abono Real en la Nube", key="btn_agregar_abono_real"):
                 st.session_state["abonos_guardados"][int(nuevo_mes)] = {
