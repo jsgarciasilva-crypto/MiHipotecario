@@ -5,14 +5,36 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import plotly.express as px
 import plotly.graph_objects as go
+from streamlit_gsheets import GSheetsConnection
 
-# Configuración de página adaptable
 st.set_page_config(page_title="Mi Crédito Produbanco", layout="wide", page_icon="🏦")
 
 st.title("🏦 Dashboard Hipotecario - Produbanco")
-st.markdown("Monitorea tu crédito, marca tus pagos realizados y simula abonos.")
+st.markdown("Monitorea tu crédito, marca tus cuotas canceladas y consérvalas en la nube.")
 
-# --- BARRA LATERAL: INGRESO DE DATOS ---
+# --- CONEXIÓN CON GOOGLE SHEETS ---
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+try:
+    # Lee la hoja configurada en Secrets (ttl=0 para ver cambios inmediatos)
+    df_checks = conn.read(ttl=0)
+    
+    # Asegurar nombres de columnas limpios
+    df_checks.columns = [str(c).strip() for c in df_checks.columns]
+    
+    if "Estado_Pago" in df_checks.columns:
+        df_checks["Estado_Pago"] = df_checks["Estado_Pago"].astype(str).str.strip().str.upper().isin(["TRUE", "VERDADERO", "1"])
+    else:
+        df_checks["Estado_Pago"] = False
+
+    if "Mes" not in df_checks.columns:
+        df_checks["Mes"] = range(1, len(df_checks) + 1)
+
+except Exception as err:
+    st.error(f"Aviso de conexión: {err}")
+    df_checks = pd.DataFrame({"Mes": range(1, 241), "Estado_Pago": [False] * 240})
+
+# --- BARRA LATERAL: PARÁMETROS DEL PRÉSTAMO ---
 with st.sidebar:
     st.header("1. Datos del Crédito")
     fecha_inicio = st.date_input("Fecha de inicio / primera cuota", datetime(2023, 1, 15))
@@ -28,7 +50,7 @@ with st.sidebar:
     st.header("3. Sistema")
     sistema = st.selectbox("Sistema de Amortización", ["Francés (Cuota Fija)", "Alemán (Capital Fijo, Cuota Decreciente)"])
 
-# --- CÁLCULOS BASE ---
+# --- CÁLCULOS MATEMÁTICOS BASE ---
 meses = int(plazo_anios * 12)
 tasa_mes = (tasa_anual / 100) / 12
 tasa_desg_mes = (tasa_desgravamen / 100) / 12
@@ -71,25 +93,21 @@ def generar_amortizacion(monto_inicial, plazo_meses, sistema_amort, fecha_arranq
 
 df_base = generar_amortizacion(monto, meses, sistema, fecha_inicio)
 
-# --- ESTADO DE SESIÓN (CHECKS) ---
-if 'cuotas_pagadas_checks' not in st.session_state or len(st.session_state['cuotas_pagadas_checks']) != meses:
-    st.session_state['cuotas_pagadas_checks'] = [False] * meses
-
-cuotas_pagadas_actual = sum(st.session_state['cuotas_pagadas_checks'])
+# Total de cuotas pagadas según la hoja
+cuotas_pagadas_actual = int(df_checks["Estado_Pago"].sum())
 
 if cuotas_pagadas_actual > 0 and cuotas_pagadas_actual <= meses:
-    saldo_actual = df_base.loc[cuotas_pagadas_actual - 1, 'Saldo Deudor ($)']
+    saldo_actual = df_base.loc[cuotas_pagadas_actual - 1, "Saldo Deudor ($)"]
     capital_ya_pagado = monto - saldo_actual
 else:
     saldo_actual = monto
     capital_ya_pagado = 0.0
 
-# --- PESTAÑAS ---
+# --- PESTAÑAS DE NAVEGACIÓN ---
 tab1, tab2, tab3, tab4 = st.tabs(["☑️ Control de Pagos", "📊 Mi Realidad Actual", "💸 Abonos Extra", "📈 SRI"])
 
 with tab1:
-    st.subheader("Control Interactivo de Cuotas")
-    st.markdown("Marca las cuotas que ya cancelaste al banco:")
+    st.subheader("Registro de Cuotas Canceladas")
     st.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses}**")
     
     anios_credito = list(range(1, int(plazo_anios) + 1))
@@ -99,22 +117,36 @@ with tab1:
     mes_fin_vista = min(anio_seleccionado * 12, meses)
     
     st.markdown("---")
-    for i in range(mes_inicio_vista, mes_fin_vista):
-        fila = df_base.iloc[i]
-        c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
+    
+    with st.form("formulario_pagos"):
+        estados_modificados = df_checks["Estado_Pago"].copy()
         
-        key_cb = f"check_{i}"
-        val_actual = st.session_state['cuotas_pagadas_checks'][i]
-        
-        nuevo_val = c1.checkbox(f"Mes {fila['Mes']}", value=val_actual, key=key_cb)
-        if nuevo_val != val_actual:
-            st.session_state['cuotas_pagadas_checks'][i] = nuevo_val
-            st.rerun()
+        for i in range(mes_inicio_vista, mes_fin_vista):
+            fila = df_base.iloc[i]
+            c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
             
-        c2.write(f"📅 **{fila['Fecha']}**")
-        c3.write(f"💵 **Cuota:** ${fila['Cuota Total ($)']:,.2f}")
-        c4.markdown("✅ *Pagado*" if nuevo_val else "⏳ *Pendiente*")
-        st.divider()
+            valor_actual = bool(df_checks.loc[i, "Estado_Pago"]) if i < len(df_checks) else False
+            
+            check = c1.checkbox(f"Mes {fila['Mes']}", value=valor_actual, key=f"pago_chk_{i}")
+            estados_modificados[i] = check
+            
+            c2.write(f"📅 **{fila['Fecha']}**")
+            c3.write(f"💵 **Cuota:** ${fila['Cuota Total ($)']:,.2f}")
+            c4.markdown("✅ *Pagado*" if check else "⏳ *Pendiente*")
+            st.divider()
+        
+        boton_guardar = st.form_submit_button("💾 Guardar Cambios en Google Sheets")
+        
+        if boton_guardar:
+            with st.spinner("Guardando en la nube..."):
+                df_guardar = df_checks.copy()
+                df_guardar["Estado_Pago"] = estados_modificados
+                df_guardar["Estado_Pago"] = df_guardar["Estado_Pago"].apply(lambda x: "TRUE" if x else "FALSE")
+                
+                conn.update(data=df_guardar)
+                st.cache_data.clear()
+            st.success("¡Pagos actualizados y guardados con éxito!")
+            st.rerun()
 
 with tab2:
     st.subheader("Tu situación al día de hoy")
@@ -159,18 +191,4 @@ with tab3:
                     try:
                         n_meses = -np.log(1 - (nuevo_saldo * tasa_mes) / cuota_ref) / np.log(1 + tasa_mes)
                         n_meses = int(np.ceil(n_meses))
-                        ahorrados = meses_restantes - n_meses
-                        df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono))
-                        ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interés ($)'].sum() + df_nuevo['Interés ($)'].sum())
-                        st.success(f"Terminas de pagar **{ahorrados} meses antes**.")
-                        st.info(f"Ahorro estimado en intereses: **${ahorro:,.2f}**")
-                    except Exception:
-                        st.info("El abono cubre la totalidad del crédito pendiente.")
-        else:
-            st.warning("No es posible realizar un abono en la última cuota.")
-
-with tab4:
-    st.subheader("🏛️ Proyección SRI (Intereses Deducibles)")
-    sri_df = df_base.groupby('Año Calendario')['Interés ($)'].sum().reset_index()
-    sri_df.columns = ['Año Fiscal', 'Intereses Deducibles ($)']
-    st.dataframe(sri_df.style.format({'Intereses Deducibles ($)': '${:,.2f}'}), use_container_width=True)
+                        ahorrados
