@@ -1,7 +1,6 @@
 streamlit
 pandas
 numpy
-numpy-financial
 plotly
 python-dateutil
-gspread
+st-gsheets-connection
