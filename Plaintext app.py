@@ -67,7 +67,7 @@ URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUd
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Inicializacion persistente y reactiva de los pagos
+# Inicialización persistente y reactiva de los pagos
 if "pagos_lista" not in st.session_state:
     try:
         df_sheet = conn.read(spreadsheet=URL_HOJA, ttl=0)
@@ -86,7 +86,7 @@ if "pagos_lista" not in st.session_state:
 def actualizar_check(idx):
     st.session_state["pagos_lista"][idx] = st.session_state[f"chk_{idx}"]
 
-# --- BARRA LATERAL DINAMICA ---
+# --- BARRA LATERAL DINÁMICA ---
 with st.sidebar:
     st.header("1. Datos del Credito")
     fecha_inicio = st.date_input("Fecha inicio / primera cuota", date(2026, 12, 1))
@@ -102,7 +102,7 @@ with st.sidebar:
     st.header("3. Sistema")
     sistema = st.selectbox("Sistema Amortizacion", ["Frances (Cuota Fija)", "Aleman (Capital Fijo)"])
 
-# Parametros calculados en caliente
+# Parámetros calculados en caliente
 meses = int(plazo_anios * 12)
 tasa_mes = (tasa_anual / 100.0) / 12.0
 tasa_desg_mes = (tasa_desgravamen / 100.0) / 12.0
@@ -148,6 +148,9 @@ df_base = generar_amortizacion(monto, meses, sistema, fecha_inicio, tasa_anual, 
 
 # Cantidad de pagos actualizada al instante
 cuotas_pagadas_actual = sum(st.session_state["pagos_lista"])
+cuotas_restantes = max(0, meses - cuotas_pagadas_actual)
+pct_cuotas_pag = (cuotas_pagadas_actual / meses * 100.0) if meses > 0 else 0.0
+pct_cuotas_pend = max(0.0, 100.0 - pct_cuotas_pag)
 
 if cuotas_pagadas_actual > 0 and cuotas_pagadas_actual <= len(df_base):
     df_pagado = df_base.iloc[:cuotas_pagadas_actual]
@@ -176,7 +179,7 @@ pct_int = (int_pagado / int_total * 100.0) if int_total > 0 else 0.0
 pct_seg = (seg_pagado / seg_total * 100.0) if seg_total > 0 else 0.0
 pct_tot = (tot_desembolsado / costo_total_credito * 100.0) if costo_total_credito > 0 else 0.0
 
-# Calculo de proxima cuota y semaforo en tiempo real
+# Cálculo de próxima cuota y semáforo en tiempo real
 proximo_mes_idx = min(cuotas_pagadas_actual, meses - 1)
 fila_proxima = df_base.iloc[proximo_mes_idx]
 fecha_prox_dt = fecha_inicio + relativedelta(months=proximo_mes_idx)
@@ -250,7 +253,7 @@ def generar_pdf():
     pdf.cell(95, 5, f"Saldo Deudor Actual: ${saldo_deudor:,.2f}")
     pdf.cell(95, 5, f"Capital Pagado: ${cap_pagado:,.2f}", ln=True)
     pdf.cell(95, 5, f"% Propiedad Cancelado: {pct_cap:.2f}%")
-    pdf.cell(95, 5, f"Cuotas Pendientes: {meses - cuotas_pagadas_actual}", ln=True)
+    pdf.cell(95, 5, f"Cuotas Pendientes: {cuotas_restantes}", ln=True)
     pdf.ln(4)
     
     pdf.set_font("Helvetica", "B", 11)
@@ -267,6 +270,7 @@ def generar_pdf():
     pdf.cell(36, 6, "% Pagado", border=1, align="C", fill=True, ln=True)
     
     filas_pdf = [
+        ("Cuotas (Plazo)", f"{meses} cuotas", f"{cuotas_pagadas_actual} pagadas", f"{cuotas_restantes} faltantes", pct_cuotas_pag),
         ("Capital", cap_total, cap_pagado, saldo_deudor, pct_cap),
         ("Intereses", int_total, int_pagado, int_pendiente, pct_int),
         ("Seguros", seg_total, seg_pagado, seg_pendiente, pct_seg),
@@ -280,15 +284,24 @@ def generar_pdf():
             pdf.set_text_color(*C_RGB_NAVY)
             pdf.set_font("Helvetica", "B", 8)
             fill_flag = True
+        elif rubro == "Cuotas (Plazo)":
+            pdf.set_fill_color(248, 250, 252)
+            pdf.set_text_color(*C_RGB_NAVY)
+            pdf.set_font("Helvetica", "B", 8)
+            fill_flag = True
         else:
             pdf.set_text_color(*C_RGB_TEXT)
             pdf.set_font("Helvetica", "", 8)
             fill_flag = False
             
+        s_tot = f"${tot_v:,.2f}" if isinstance(tot_v, (int, float)) else str(tot_v)
+        s_pag = f"${pag_v:,.2f}" if isinstance(pag_v, (int, float)) else str(pag_v)
+        s_pend = f"${pend_v:,.2f}" if isinstance(pend_v, (int, float)) else str(pend_v)
+        
         pdf.cell(40, 5.5, rubro, border=1, align="L", fill=fill_flag)
-        pdf.cell(38, 5.5, f"${tot_v:,.2f}", border=1, align="R", fill=fill_flag)
-        pdf.cell(38, 5.5, f"${pag_v:,.2f}", border=1, align="R", fill=fill_flag)
-        pdf.cell(38, 5.5, f"${pend_v:,.2f}", border=1, align="R", fill=fill_flag)
+        pdf.cell(38, 5.5, s_tot, border=1, align="R", fill=fill_flag)
+        pdf.cell(38, 5.5, s_pag, border=1, align="R", fill=fill_flag)
+        pdf.cell(38, 5.5, s_pend, border=1, align="R", fill=fill_flag)
         pdf.cell(36, 5.5, f"{p_v:.1f}%", border=1, align="R", fill=fill_flag, ln=True)
         
     pdf.ln(5)
@@ -363,22 +376,77 @@ with tab1:
 
 with tab2:
     st.subheader("Auditoria de Pagos y Porcentajes de Avance")
+    
+    # Métricas de dinero desembolsado
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Capital Amortizado", f"${cap_pagado:,.2f}", f"{pct_cap:.1f}%")
-    col2.metric("Intereses Cancelados", f"${int_pagado:,.2f}", f"{pct_int:.1f}%")
-    col3.metric("Seguros Desembolsados", f"${seg_pagado:,.2f}", f"{pct_seg:.1f}%")
-    col4.metric("Desembolso General", f"${tot_desembolsado:,.2f}", f"{pct_tot:.1f}%")
+    col1.metric("Capital Amortizado", f"${cap_pagado:,.2f}", f"{pct_cap:.1f}% amortizado")
+    col2.metric("Intereses Cancelados", f"${int_pagado:,.2f}", f"{pct_int:.1f}% pagado")
+    col3.metric("Seguros Desembolsados", f"${seg_pagado:,.2f}", f"{pct_seg:.1f}% pagado")
+    col4.metric("Desembolso General", f"${tot_desembolsado:,.2f}", f"{pct_tot:.1f}% del costo total")
+
+    # Métricas exclusivas del plazo y cuotas (cumplidas vs faltantes)
+    st.markdown("#### ⏳ Estado del Plazo y Cuotas")
+    col_q1, col_q2 = st.columns(2)
+    col_q1.metric(
+        "Cuotas Canceladas", 
+        f"{cuotas_pagadas_actual} de {meses} cuotas", 
+        f"{pct_cuotas_pag:.2f}% del plazo total cumplido"
+    )
+    col_q2.metric(
+        "Cuotas Faltantes / Restantes", 
+        f"{cuotas_restantes} cuotas", 
+        f"{cuotas_restantes/12.0:.1f} anios pendientes ({pct_cuotas_pend:.2f}%)",
+        delta_color="inverse"
+    )
+
     st.markdown("---")
     st.markdown("#### Tabla de Distribucion Financiera")
     
     filas_resumen = [
-        {"Rubro": "Capital", "Total Proyectado": f"${cap_total:,.2f}", "Pagado a la Fecha": f"${cap_pagado:,.2f}", "% Pagado": f"{pct_cap:.2f}%", "Saldo Pendiente": f"${saldo_deudor:,.2f}", "% Pendiente": f"{100-pct_cap:.2f}%"},
-        {"Rubro": "Intereses", "Total Proyectado": f"${int_total:,.2f}", "Pagado a la Fecha": f"${int_pagado:,.2f}", "% Pagado": f"{pct_int:.2f}%", "Saldo Pendiente": f"${int_pendiente:,.2f}", "% Pendiente": f"{100-pct_int:.2f}%"},
-        {"Rubro": "Seguros", "Total Proyectado": f"${seg_total:,.2f}", "Pagado a la Fecha": f"${seg_pagado:,.2f}", "% Pagado": f"{pct_seg:.2f}%", "Saldo Pendiente": f"${seg_pendiente:,.2f}", "% Pendiente": f"{100-pct_seg:.2f}%"},
-        {"Rubro": "Total General", "Total Proyectado": f"${costo_total_credito:,.2f}", "Pagado a la Fecha": f"${tot_desembolsado:,.2f}", "% Pagado": f"{pct_tot:.2f}%", "Saldo Pendiente": f"${costo_pendiente:,.2f}", "% Pendiente": f"{100-pct_tot:.2f}%"}
+        {
+            "Rubro": "📅 Cuotas (Plazo)", 
+            "Total Proyectado": f"{meses} cuotas", 
+            "Pagado a la Fecha": f"{cuotas_pagadas_actual} pagadas", 
+            "% Pagado": f"{pct_cuotas_pag:.2f}%", 
+            "Saldo Pendiente": f"{cuotas_restantes} faltantes", 
+            "% Pendiente": f"{pct_cuotas_pend:.2f}%"
+        },
+        {
+            "Rubro": "💵 Capital", 
+            "Total Proyectado": f"${cap_total:,.2f}", 
+            "Pagado a la Fecha": f"${cap_pagado:,.2f}", 
+            "% Pagado": f"{pct_cap:.2f}%", 
+            "Saldo Pendiente": f"${saldo_deudor:,.2f}", 
+            "% Pendiente": f"{100-pct_cap:.2f}%"
+        },
+        {
+            "Rubro": "📈 Intereses", 
+            "Total Proyectado": f"${int_total:,.2f}", 
+            "Pagado a la Fecha": f"${int_pagado:,.2f}", 
+            "% Pagado": f"{pct_int:.2f}%", 
+            "Saldo Pendiente": f"${int_pendiente:,.2f}", 
+            "% Pendiente": f"{100-pct_int:.2f}%"
+        },
+        {
+            "Rubro": "🛡️ Seguros", 
+            "Total Proyectado": f"${seg_total:,.2f}", 
+            "Pagado a la Fecha": f"${seg_pagado:,.2f}", 
+            "% Pagado": f"{pct_seg:.2f}%", 
+            "Saldo Pendiente": f"${seg_pendiente:,.2f}", 
+            "% Pendiente": f"{100-pct_seg:.2f}%"
+        },
+        {
+            "Rubro": "🏛️ Total General", 
+            "Total Proyectado": f"${costo_total_credito:,.2f}", 
+            "Pagado a la Fecha": f"${tot_desembolsado:,.2f}", 
+            "% Pagado": f"{pct_tot:.2f}%", 
+            "Saldo Pendiente": f"${costo_pendiente:,.2f}", 
+            "% Pendiente": f"{100-pct_tot:.2f}%"
+        }
     ]
     tabla_resumen = pd.DataFrame(filas_resumen)
     st.dataframe(tabla_resumen, use_container_width=True)
+    
     st.markdown("---")
     st.markdown("#### Progreso de Titularidad del Inmueble")
     st.progress(min(100, int(pct_cap)))
