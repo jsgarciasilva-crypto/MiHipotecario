@@ -62,8 +62,8 @@ st.markdown(f"""
 st.markdown('<h1 class="header-title">🏛️ Monitor Hipotecario</h1>', unsafe_allow_html=True)
 st.markdown('<p class="header-sub">Crédito Hipotecario Produbanco Familia García Castillo</p>', unsafe_allow_html=True)
 
-URL_HOJA = "https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing"
-URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec"
+URL_HOJA = "[https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing](https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing)"
+URL_PUENTE = "[https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec](https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec)"
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -176,7 +176,6 @@ def calcular_cronograma_multi_abono(
         interes = saldo * tm
         seg_desg = saldo * tdm
 
-        # Detectar si hay un abono extraordinario registrado para este mes
         datos_abono = diccionario_abonos.get(mes, None)
         extra = float(datos_abono["monto"]) if datos_abono else 0.0
         tipo_ab = datos_abono["tipo"] if datos_abono else ""
@@ -210,7 +209,6 @@ def calcular_cronograma_multi_abono(
             "Saldo": round(max(0.0, saldo), 2)
         })
 
-        # Si el abono fue para Reducir Cuota, recalculamos la cuota para los meses restantes
         if extra > 0 and saldo > 0.01 and tipo_ab == "Reducir Cuota":
             meses_rest = plazo_m_orig - mes
             if meses_rest > 0:
@@ -423,7 +421,7 @@ def generar_pdf():
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "☑️ Control de Pagos", 
     "📊 Avance y Graficos", 
-    "💸 Abonos a Capital (Historial)",
+    "💸 Abonos a Capital",
     "❄️ Micro-Abonos (Bola de Nieve)",
     "⚖️ Prepago vs Inversion",
     "📈 SRI", 
@@ -434,10 +432,10 @@ with tab1:
     st.subheader("Registro de Cuotas Canceladas")
     
     if len(st.session_state["abonos_guardados"]) > 0:
-        st.success(f"⚡ **Crédito Optimizado con {len(st.session_state['abonos_guardados'])} Abono(s) Activo(s):** Total abonado: **${total_abonado_capital:,.2f}** | Plazo actual: **{meses_totales} cuotas** ({meses_totales/12:.1f} años) | Ahorro total en intereses: **${ahorro_intereses_total:,.2f}**")
+        st.success(f"⚡ **Crédito Optimizado con {len(st.session_state['abonos_guardados'])} Abono(s) Activo(s):** Total abonado: **\\${total_abonado_capital:,.2f}** | Plazo actual: **{meses_totales} cuotas** ({meses_totales/12:.1f} años) | Ahorro total en intereses: **\\${ahorro_intereses_total:,.2f}**")
             
     col_t1, col_t2 = st.columns([3, 1])
-    col_t1.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses_totales}** | Saldo Deudor: **${saldo_deudor:,.2f}**")
+    col_t1.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses_totales}** | Saldo Deudor: **\\${saldo_deudor:,.2f}**")
     
     if col_t2.button("💾 Guardar en la Nube", key="btn_save_top"):
         with st.spinner("Guardando permanentemente en Google Sheets..."):
@@ -464,13 +462,12 @@ with tab1:
         )
         c2.write(f"📅 **{fila['Fecha']}**")
         
-        # Etiqueta para distinguir abonos y cuotas reducidas
         if fila['Abono_Extra'] > 0:
-            c3.markdown(f"💵 **Cuota:** ${fila['Cuota_Total']:,.2f} *(Incluye Abono ${fila['Abono_Extra']:,.0f})*")
+            c3.markdown(f"💵 **Cuota:** \\${fila['Cuota_Total']:,.2f} *(Incluye Abono \\${fila['Abono_Extra']:,.0f})*")
         elif i == meses_totales - 1 and meses_ahorrados_totales > 0:
-            c3.markdown(f"💵 **Cuota Final:** ${fila['Cuota_Total']:,.2f} 🏁 *(Liquidación deuda)*")
+            c3.markdown(f"💵 **Cuota Final:** \\${fila['Cuota_Total']:,.2f} 🏁 *(Liquidación deuda)*")
         else:
-            c3.write(f"💵 **Cuota:** ${fila['Cuota_Total']:,.2f}")
+            c3.write(f"💵 **Cuota:** \\${fila['Cuota_Total']:,.2f}")
             
         c4.markdown("✅ *Pagado*" if valor_actual else "⏳ *Pendiente*")
         st.divider()
@@ -601,64 +598,117 @@ with tab2:
     st.plotly_chart(fig_saldo, use_container_width=True)
 
 with tab3:
-    st.subheader("💸 Registro e Histórico de Abonos a Capital")
-    st.markdown("Registra y acumula múltiples abonos a lo largo del crédito. Cada abono recalculará permanentemente el cronograma y se guardará en la nube.")
+    st.subheader("💸 Gestión de Abonos Extraordinarios a Capital")
     
-    # 1. Formulario para agregar un nuevo abono
-    with st.expander("➕ **Registrar Nuevo Abono a Capital**", expanded=True):
-        col_reg1, col_reg2, col_reg3, col_reg4 = st.columns([1.5, 2, 2, 1.5])
+    subtab_sim, subtab_real = st.tabs([
+        "🧪 1. Simulador de Escenarios (Sin alterar el crédito)", 
+        "🏛️ 2. Abonos Reales Aplicados (Histórico en Nube)"
+    ])
+    
+    # --- SUBTAB 1: SIMULADOR HIPOTÉTICO ---
+    with subtab_sim:
+        st.markdown("#### 🧪 Proyección y Simulación Hipotética")
+        st.caption("Prueba libremente diferentes montos y plazos para conocer el impacto y el ahorro estimado. Lo que pruebes aquí **NO** alterará tu crédito real a menos que decidas aplicarlo.")
         
-        mes_sug = min(cuotas_pagadas_actual + 1, meses_orig)
-        nuevo_mes = col_reg1.number_input("Mes de aplicación", min_value=1, max_value=meses_orig, value=mes_sug, step=1, key="input_nuevo_mes")
-        nuevo_monto = col_reg2.number_input("Monto del Abono ($)", min_value=100.0, value=10000.0, step=1000.0, key="input_nuevo_monto")
-        nuevo_tipo = col_reg3.selectbox("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], key="input_nuevo_tipo")
+        col_s1, col_s2, col_s3 = st.columns(3)
+        mes_sug_sim = min(cuotas_pagadas_actual + 1, meses_totales)
+        sim_mes = col_s1.number_input("Mes del abono hipotético", min_value=1, max_value=meses_orig, value=mes_sug_sim, step=1, key="sim_input_mes")
+        sim_monto = col_s2.number_input("Monto a simular ($)", min_value=100.0, value=30000.0, step=1000.0, key="sim_input_monto")
+        sim_tipo = col_s3.radio("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], key="sim_input_tipo")
         
-        fecha_proyectada = fecha_inicio + relativedelta(months=int(nuevo_mes - 1))
-        col_reg4.write(f"📅 Fecha cuota:\n**{fecha_proyectada.strftime('%Y-%m')}**")
+        # Diccionario temporal que combina los abonos reales existentes + el abono hipotético
+        dict_temp = dict(st.session_state["abonos_guardados"])
+        dict_temp[int(sim_mes)] = {"monto": float(sim_monto), "tipo": sim_tipo}
         
-        if st.button("➕ Agregar este Abono al Crédito", key="btn_agregar_abono"):
-            st.session_state["abonos_guardados"][int(nuevo_mes)] = {
-                "monto": float(nuevo_monto),
-                "tipo": nuevo_tipo
+        df_simulacion = calcular_cronograma_multi_abono(
+            monto, plazo_anios, sistema, fecha_inicio,
+            tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda,
+            diccionario_abonos=dict_temp
+        )
+        
+        meses_ahorrados_sim = max(0, len(df_base) - len(df_simulacion))
+        ahorro_int_sim = max(0.0, df_base["Interes"].sum() - df_simulacion["Interes"].sum())
+        
+        st.markdown("---")
+        st.markdown("##### 📊 Resultado de la Simulación:")
+        
+        if sim_tipo == "Reducir Plazo":
+            st.success(f"🎉 **Terminarías de pagar {meses_ahorrados_sim} meses antes** (equivale a {meses_ahorrados_sim/12:.1f} años menos de deuda).")
+            st.info(f"💰 **Ahorro adicional estimado en intereses:** \\${ahorro_int_sim:,.2f}")
+        else:
+            mes_cuota_nueva = min(int(sim_mes + 1), len(df_simulacion))
+            cuota_nueva_val = df_simulacion.loc[df_simulacion['Mes'] == mes_cuota_nueva, 'Cuota_Total'].values[0]
+            cuota_actual_val = df_base.loc[df_base['Mes'] == min(int(sim_mes + 1), len(df_base)), 'Cuota_Total'].values[0]
+            alivio_mensual = max(0.0, cuota_actual_val - cuota_nueva_val)
+            
+            st.success(f"🎉 **Tu nueva cuota bajaría a: \\${cuota_nueva_val:,.2f}** a partir del Mes {sim_mes + 1} (te liberas de \\${alivio_mensual:,.2f} cada mes).")
+            st.info(f"💰 **Ahorro adicional estimado en intereses:** \\${ahorro_int_sim:,.2f}")
+            
+        st.markdown("---")
+        if st.button("📥 ¿Te gustó este escenario? Aplicar esta simulación como Abono Real al Crédito", key="btn_promover_sim"):
+            st.session_state["abonos_guardados"][int(sim_mes)] = {
+                "monto": float(sim_monto),
+                "tipo": sim_tipo
             }
             guardar_en_nube()
             st.rerun()
 
-    st.markdown("---")
-    st.markdown("#### 📜 Bitácora Histórica de Abonos Registrados")
-    
-    if len(st.session_state["abonos_guardados"]) == 0:
-        st.info("ℹ️ No hay abonos extraordinarios registrados todavía. Agrega uno arriba para ver cómo impacta tus cuotas y plazo.")
-    else:
-        # Tabla de abonos registrados con botón para eliminar
-        lista_abonos_mostrar = []
-        for mes_k in sorted(st.session_state["abonos_guardados"].keys()):
-            datos_k = st.session_state["abonos_guardados"][mes_k]
-            f_k = fecha_inicio + relativedelta(months=mes_k - 1)
-            lista_abonos_mostrar.append({
-                "Mes": mes_k,
-                "Fecha Cuota": f_k.strftime('%Y-%m'),
-                "Monto Abonado": f"${datos_k['monto']:,.2f}",
-                "Objetivo": datos_k['tipo']
-            })
-            
-        df_abonos_tabla = pd.DataFrame(lista_abonos_mostrar)
-        st.dataframe(df_abonos_tabla, use_container_width=True)
+    # --- SUBTAB 2: ABONOS REALES Y BITÁCORA ---
+    with subtab_real:
+        st.markdown("#### 🏛️ Bitácora y Registro de Abonos Reales")
+        st.caption("Abonos confirmados que impactan permanentemente todo el dashboard y se sincronizan en la nube.")
         
-        col_elim1, col_elim2 = st.columns([2, 2])
-        mes_a_eliminar = col_elim1.selectbox("Selecciona un mes para eliminar su abono:", sorted(st.session_state["abonos_guardados"].keys()))
-        if col_elim2.button("🗑️ Eliminar Abono Seleccionado"):
-            if mes_a_eliminar in st.session_state["abonos_guardados"]:
-                del st.session_state["abonos_guardados"][mes_a_eliminar]
+        with st.expander("➕ **Registrar Nuevo Abono Real Directo**", expanded=False):
+            col_reg1, col_reg2, col_reg3, col_reg4 = st.columns([1.5, 2, 2, 1.5])
+            
+            mes_sug = min(cuotas_pagadas_actual + 1, meses_orig)
+            nuevo_mes = col_reg1.number_input("Mes de aplicación", min_value=1, max_value=meses_orig, value=mes_sug, step=1, key="real_nuevo_mes")
+            nuevo_monto = col_reg2.number_input("Monto del Abono ($)", min_value=100.0, value=10000.0, step=1000.0, key="real_nuevo_monto")
+            nuevo_tipo = col_reg3.selectbox("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], key="real_nuevo_tipo")
+            
+            fecha_proyectada = fecha_inicio + relativedelta(months=int(nuevo_mes - 1))
+            col_reg4.write(f"📅 Fecha cuota:\n**{fecha_proyectada.strftime('%Y-%m')}**")
+            
+            if st.button("➕ Confirmar y Guardar Abono Real en la Nube", key="btn_agregar_abono_real"):
+                st.session_state["abonos_guardados"][int(nuevo_mes)] = {
+                    "monto": float(nuevo_monto),
+                    "tipo": nuevo_tipo
+                }
                 guardar_en_nube()
                 st.rerun()
+
+        st.markdown("##### 📜 Histórico de Abonos Aplicados:")
+        if len(st.session_state["abonos_guardados"]) == 0:
+            st.info("ℹ️ No hay abonos extraordinarios reales registrados actualmente.")
+        else:
+            lista_abonos_mostrar = []
+            for mes_k in sorted(st.session_state["abonos_guardados"].keys()):
+                datos_k = st.session_state["abonos_guardados"][mes_k]
+                f_k = fecha_inicio + relativedelta(months=mes_k - 1)
+                lista_abonos_mostrar.append({
+                    "Mes": mes_k,
+                    "Fecha Cuota": f_k.strftime('%Y-%m'),
+                    "Monto Abonado": f"${datos_k['monto']:,.2f}",
+                    "Objetivo": datos_k['tipo']
+                })
                 
-        st.markdown("---")
-        st.markdown("#### 🎯 Impacto Consolidado de Todos los Abonos")
-        res1, res2, res3 = st.columns(3)
-        res1.metric("Capital Extra Total Abonado", f"${total_abonado_capital:,.2f}")
-        res2.metric("Ahorro Acumulado en Intereses", f"${ahorro_intereses_total:,.2f}")
-        res3.metric("Plazo Restante Reducido", f"{meses_ahorrados_totales} meses ahorrados", f"{meses_ahorrados_totales/12.0:.1f} años menos")
+            df_abonos_tabla = pd.DataFrame(lista_abonos_mostrar)
+            st.dataframe(df_abonos_tabla, use_container_width=True)
+            
+            col_elim1, col_elim2 = st.columns([2, 2])
+            mes_a_eliminar = col_elim1.selectbox("Selecciona un mes para eliminar su abono:", sorted(st.session_state["abonos_guardados"].keys()))
+            if col_elim2.button("🗑️ Eliminar Abono Seleccionado"):
+                if mes_a_eliminar in st.session_state["abonos_guardados"]:
+                    del st.session_state["abonos_guardados"][mes_a_eliminar]
+                    guardar_en_nube()
+                    st.rerun()
+                    
+            st.markdown("---")
+            st.markdown("##### 🎯 Impacto Real Consolidado en tu Crédito")
+            res1, res2, res3 = st.columns(3)
+            res1.metric("Capital Extra Total Abonado", f"${total_abonado_capital:,.2f}")
+            res2.metric("Ahorro Acumulado en Intereses", f"${ahorro_intereses_total:,.2f}")
+            res3.metric("Plazo Total Reducido", f"{meses_ahorrados_totales} meses ahorrados", f"{meses_ahorrados_totales/12.0:.1f} años menos")
 
 with tab4:
     st.subheader("❄️ Simulador de Micro-Abonos Mensuales (Efecto Bola de Nieve)")
