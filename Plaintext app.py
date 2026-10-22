@@ -5,6 +5,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Mi Crédito Produbanco", layout="wide", page_icon="🏦")
@@ -12,14 +13,14 @@ st.set_page_config(page_title="Mi Crédito Produbanco", layout="wide", page_icon
 st.title("🏦 Dashboard Hipotecario - Produbanco")
 st.markdown("Monitorea tu crédito, marca tus cuotas canceladas y consérvalas en la nube.")
 
-# --- ENLACE DIRECTO A TU GOOGLE SHEET ---
+# --- ENLACES DE CONEXIÓN ---
 URL_HOJA = "https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing"
+URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec"
 
-# --- CONEXIÓN CON GOOGLE SHEETS ---
+# --- LECTURA DESDE GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
-    # Leemos indicando la URL directamente
     df_checks = conn.read(spreadsheet=URL_HOJA, ttl=0)
     df_checks.columns = [str(c).strip() for c in df_checks.columns]
     
@@ -138,15 +139,15 @@ with tab1:
         boton_guardar = st.form_submit_button("💾 Guardar Cambios en Google Sheets")
         
         if boton_guardar:
-            with st.spinner("Guardando en la nube..."):
-                df_guardar = df_checks.copy()
-                df_guardar["Estado_Pago"] = estados_modificados
-                df_guardar["Estado_Pago"] = df_guardar["Estado_Pago"].apply(lambda x: "TRUE" if x else "FALSE")
-                
-                conn.update(spreadsheet=URL_HOJA, data=df_guardar)
-                st.cache_data.clear()
-            st.success("¡Pagos actualizados y guardados con éxito!")
-            st.rerun()
+            with st.spinner("Guardando cambios en Google Sheets..."):
+                lista_a_guardar = [bool(x) for x in estados_modificados.tolist()]
+                try:
+                    respuesta = requests.post(URL_PUENTE, json=lista_a_guardar, timeout=15)
+                    st.cache_data.clear()
+                    st.success("¡Pagos actualizados y guardados con éxito!")
+                    st.rerun()
+                except Exception as err_puente:
+                    st.error(f"Error al enviar datos: {err_puente}")
 
 with tab2:
     st.subheader("Tu situación al día de hoy")
