@@ -62,8 +62,8 @@ st.markdown(f"""
 st.markdown('<h1 class="header-title">🏛️ Monitor Hipotecario</h1>', unsafe_allow_html=True)
 st.markdown('<p class="header-sub">Crédito Hipotecario Produbanco Familia García Castillo</p>', unsafe_allow_html=True)
 
-URL_HOJA = "[https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing](https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing)"
-URL_PUENTE = "[https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec](https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec)"
+URL_HOJA = "https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing".strip()
+URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec".strip()
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -120,7 +120,8 @@ def guardar_en_nube():
             "tipo": ab_tipo
         })
     try:
-        requests.post(URL_PUENTE, json=payload, timeout=15)
+        url_destino = URL_PUENTE.strip()
+        requests.post(url_destino, json=payload, timeout=15)
         st.success("¡Datos y abonos guardados con éxito en Google Sheets!")
     except Exception as err:
         st.error(f"Error al enviar datos: {err}")
