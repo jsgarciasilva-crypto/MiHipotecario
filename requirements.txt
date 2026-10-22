@@ -4,3 +4,4 @@ numpy
 numpy-financial
 plotly
 python-dateutil
+gspread
