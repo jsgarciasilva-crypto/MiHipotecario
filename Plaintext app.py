@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 import plotly.express as px
 import plotly.graph_objects as go
@@ -11,7 +11,7 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Mi Credito Produbanco", layout="wide", page_icon="🏦")
 st.title("🏦 Dashboard Hipotecario - Produbanco")
-st.markdown("Monitorea tu credito, audita porcentajes y descarga reportes.")
+st.markdown("Monitorea tu credito, simula estrategias de prepago, analiza costo de oportunidad y audita tu avance.")
 
 URL_HOJA = "https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing"
 URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUdY40uWaoPZR2Ny3XIC7Z0g98PmT0aRR43WElYJTU4/exec"
@@ -115,6 +115,24 @@ pct_int = (int_pagado / int_total * 100.0) if int_total > 0 else 0.0
 pct_seg = (seg_pagado / seg_total * 100.0) if seg_total > 0 else 0.0
 pct_tot = (tot_desembolsado / costo_total_credito * 100.0) if costo_total_credito > 0 else 0.0
 
+# Calculo de proximo pago
+proximo_mes_idx = min(cuotas_pagadas_actual, meses - 1)
+fila_proxima = df_base.iloc[proximo_mes_idx]
+fecha_prox_dt = fecha_inicio + relativedelta(months=proximo_mes_idx)
+hoy = date.today()
+dias_restantes = (fecha_prox_dt.date() - hoy).days
+
+# Banner superior de estatus
+col_b1, col_b2, col_b3 = st.columns(3)
+col_b1.metric("Proxima Cuota a Pagar", f"Mes {fila_proxima['Mes']} ({fila_proxima['Fecha']})")
+col_b2.metric("Valor a Debitar", f"${fila_proxima['Cuota_Total']:,.2f}")
+if dias_restantes > 0:
+    col_b3.metric("Dias Restantes para Corte", f"{dias_restantes} dias", delta="A tiempo", delta_color="normal")
+elif dias_restantes == 0:
+    col_b3.metric("Dias Restantes para Corte", "HOY es dia de pago", delta="Atencion", delta_color="inverse")
+else:
+    col_b3.metric("Estado de Cuota", f"Corte paso hace {abs(dias_restantes)} dias", delta="Verificar pago", delta_color="inverse")
+
 def generar_pdf():
     pdf = FPDF()
     pdf.add_page()
@@ -175,10 +193,12 @@ def generar_pdf():
         pdf.cell(50, 5, f"${fila['Interes']:,.2f}", new_x="LMARGIN", new_y="NEXT")
     return bytes(pdf.output())
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "☑️ Control de Pagos", 
-    "📊 Avance y Rubros", 
-    "💸 Abonos Extra", 
+    "📊 Avance y Graficos", 
+    "💸 Abonos Puntuales",
+    "❄️ Micro-Abonos (Bola de Nieve)",
+    "⚖️ Prepago vs Inversion",
     "📈 SRI", 
     "📄 Reporte PDF"
 ])
@@ -238,14 +258,28 @@ with tab2:
     st.progress(min(100, int(pct_cap)))
     st.caption(f"Tienes libre de hipoteca el **{pct_cap:.2f}%** del valor original.")
 
+    st.markdown("---")
+    st.markdown("#### Curva de Amortizacion: Descenso de Saldo Deudor")
+    fig_saldo = px.area(
+        df_base, 
+        x="Mes", 
+        y="Saldo", 
+        title="Proyeccion del Saldo Deudor en el Tiempo",
+        labels={"Saldo": "Saldo Deudor ($)", "Mes": "Numero de Mes"},
+        color_discrete_sequence=["#1f77b4"]
+    )
+    if cuotas_pagadas_actual > 0:
+        fig_saldo.add_vline(x=cuotas_pagadas_actual, line_dash="dash", line_color="green", annotation_text="Punto Actual")
+    st.plotly_chart(fig_saldo, use_container_width=True)
+
 with tab3:
-    st.subheader("Simulador de Abonos Extraordinarios")
+    st.subheader("Simulador de Abonos Extraordinarios Puntuales")
     col_a, col_b, col_c = st.columns(3)
     mes_sug = min(cuotas_pagadas_actual + 1, meses)
-    mes_abono = col_a.number_input("Mes del abono", min_value=1, max_value=meses, value=mes_sug)
-    monto_abono = col_b.number_input("Monto del Abono ($)", min_value=100.0, value=5000.0, step=500.0)
-    tipo_beneficio = col_c.radio("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"])
-    if st.button("Calcular impacto del abono"):
+    mes_abono = col_a.number_input("Mes del abono", min_value=1, max_value=meses, value=mes_sug, key="abono_mes_input")
+    monto_abono = col_b.number_input("Monto del Abono ($)", min_value=100.0, value=5000.0, step=500.0, key="abono_monto_input")
+    tipo_beneficio = col_c.radio("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"], key="abono_tipo_input")
+    if st.button("Calcular impacto del abono puntual"):
         if mes_abono < meses:
             saldo_en_mes = df_base.loc[mes_abono-1, 'Saldo']
             if monto_abono >= saldo_en_mes:
@@ -268,7 +302,7 @@ with tab3:
                         ahorrados = meses_restantes - n_meses
                         df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono))
                         ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interes'].sum() + df_nuevo['Interes'].sum())
-                        st.success(f"Terminas de pagar **{ahorrados} meses antes**.")
+                        st.success(f"Terminas de pagar **{ahorrados} meses antes** (equivale a {ahorrados/12:.1f} anios).")
                         st.info(f"Ahorro estimado en intereses: **${ahorro:,.2f}**")
                     except Exception:
                         st.info("El abono cubre la totalidad del credito pendiente.")
@@ -276,12 +310,73 @@ with tab3:
             st.warning("No es posible realizar un abono en la ultima cuota.")
 
 with tab4:
+    st.subheader("❄️ Simulador de Micro-Abonos Mensuales (Efecto Bola de Nieve)")
+    st.markdown("¿Que pasa si sumas una cantidad fija a capital cada mes ademas de tu cuota normal?")
+    
+    col_sn1, col_sn2 = st.columns(2)
+    micro_abono = col_sn1.slider("Abono extra mensual a capital ($)", min_value=25, max_value=1000, value=100, step=25)
+    mes_inicio_snowball = col_sn2.number_input("Iniciar micro-abonos desde el mes:", min_value=cuotas_pagadas_actual + 1, max_value=meses, value=cuotas_pagadas_actual + 1)
+    
+    saldo_snow = saldo_deudor
+    meses_transcurridos = cuotas_pagadas_actual
+    tot_int_snow = int_pagado
+    
+    factor_ref = (1 + tasa_mes) ** meses
+    cuota_fija_cap_int = monto * (tasa_mes * factor_ref) / (factor_ref - 1)
+    
+    mes_actual_sim = meses_transcurridos
+    while saldo_snow > 0.01 and mes_actual_sim < meses:
+        mes_actual_sim += 1
+        interes_mes = saldo_snow * tasa_mes
+        tot_int_snow += interes_mes
+        
+        capital_regular = cuota_fija_cap_int - interes_mes
+        abono_aplicable = micro_abono if mes_actual_sim >= mes_inicio_snowball else 0.0
+        
+        capital_total_mes = min(saldo_snow, capital_regular + abono_aplicable)
+        saldo_snow -= capital_total_mes
+    
+    meses_ahorrados_snow = meses - mes_actual_sim
+    anios_ahorrados_snow = meses_ahorrados_snow / 12.0
+    ahorro_interes_snow = max(0.0, int_total - tot_int_snow)
+    
+    cs1, cs2, cs3 = st.columns(3)
+    cs1.metric("Tiempo Ahorrado", f"{meses_ahorrados_snow} meses", f"{anios_ahorrados_snow:.1f} anios antes")
+    cs2.metric("Ahorro Total en Intereses", f"${ahorro_interes_snow:,.2f}")
+    cs3.metric("Nuevo Mes Final", f"Mes {mes_actual_sim} de {meses}")
+    
+    st.info(f"💡 Al aportar **${micro_abono:,.2f} extra cada mes**, cancelas tu deuda en **{mes_actual_sim - cuotas_pagadas_actual} meses mas** en lugar de {meses - cuotas_pagadas_actual} meses restantes.")
+
+with tab5:
+    st.subheader("⚖️ Analisis Financiero: Prepagar Credito vs Invertir en Poliza")
+    st.markdown("Compara el costo de tu deuda frente al rendimiento de depositar tu dinero en una poliza o fondo.")
+    
+    tasa_costo_efectivo = tasa_anual + tasa_desgravamen + tasa_incendio
+    col_inv1, col_inv2 = st.columns(2)
+    tasa_inversion = col_inv1.number_input("Rendimiento anual estimado de tu inversion / poliza (%)", value=8.5, step=0.25)
+    capital_analisis = col_inv2.number_input("Monto de capital disponible para evaluar ($)", value=5000.0, step=500.0)
+    
+    diff_tasa = tasa_costo_efectivo - tasa_inversion
+    ahorro_anual_credito = capital_analisis * (tasa_costo_efectivo / 100.0)
+    ganancia_anual_inversion = capital_analisis * (tasa_inversion / 100.0)
+    
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric("Costo Total Deuda (Tasa + Seguros)", f"{tasa_costo_efectivo:.2f}%")
+    col_m2.metric("Rendimiento Inversion", f"{tasa_inversion:.2f}%")
+    col_m3.metric("Diferencial Financiero", f"{abs(diff_tasa):.2f}%", delta="Ventaja Prepago" if diff_tasa > 0 else "Ventaja Inversion")
+    
+    if diff_tasa > 0:
+        st.success(f"🏆 **Conviene PREPAGAR el credito:** El costo de tu deuda ({tasa_costo_efectivo:.2f}%) supera el rendimiento de la inversion ({tasa_inversion:.2f}%). Al abonar ${capital_analisis:,.2f} al credito te ahorras **${ahorro_anual_credito:,.2f}/anio**, mientras que invirtiendolo ganarias solo **${ganancia_anual_inversion:,.2f}/anio**.")
+    else:
+        st.warning(f"📈 **Conviene INVERTIR:** La inversion rinde ({tasa_inversion:.2f}%), superando el costo del credito ({tasa_costo_efectivo:.2f}%). Tu dinero crece mas rapido invertido.")
+
+with tab6:
     st.subheader("🏛️ Proyeccion SRI (Intereses Deducibles)")
     sri_df = df_base.groupby('Anio')['Interes'].sum().reset_index()
     sri_df.columns = ['Anio Fiscal', 'Intereses Deducibles ($)']
     st.dataframe(sri_df.style.format({'Intereses Deducibles ($)': '${:,.2f}'}), use_container_width=True)
 
-with tab5:
+with tab7:
     st.subheader("📄 Reporte Ejecutivo en PDF")
     st.markdown("Descarga un informe detallado con el corte actual de amortizacion, saldos e intereses.")
     pdf_bytes = generar_pdf()
