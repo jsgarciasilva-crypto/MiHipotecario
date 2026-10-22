@@ -67,20 +67,23 @@ URL_PUENTE = "https://script.google.com/macros/s/AKfycbws0PYJdAzDLS_wnd_4DbyTlUd
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- INICIALIZACIÓN PERSISTENTE DE PAGOS Y ABONOS ---
+# --- INICIALIZACIÓN PERSISTENTE DE PAGOS, ABONOS Y REAJUSTES DE TASA ---
 if "datos_cargados" not in st.session_state:
     pagos = [False] * 240
     abonos_dict = {}
+    reajustes_dict = {}
     try:
         df_sheet = conn.read(spreadsheet=URL_HOJA, ttl=0)
         df_sheet.columns = [str(c).strip() for c in df_sheet.columns]
         
+        # 1. Cargar pagos
         if "Estado_Pago" in df_sheet.columns:
             pagos_raw = df_sheet["Estado_Pago"].astype(str).str.strip().str.upper().isin(["TRUE", "VERDADERO", "1"]).tolist()
             pagos = pagos_raw[:240]
             if len(pagos) < 240:
                 pagos.extend([False] * (240 - len(pagos)))
                 
+        # 2. Cargar abonos históricos
         if "Abono_Extra" in df_sheet.columns and "Tipo_Abono" in df_sheet.columns:
             for idx, fila in df_sheet.iterrows():
                 try:
@@ -94,12 +97,32 @@ if "datos_cargados" not in st.session_state:
                         }
                 except Exception:
                     continue
+                    
+        # 3. Cargar reajustes de tasa registrados
+        if "Tasa_Interes" in df_sheet.columns:
+            tasa_prev = None
+            for idx, fila in df_sheet.iterrows():
+                try:
+                    m_val = int(fila["Mes"]) if "Mes" in df_sheet.columns else (idx + 1)
+                    t_val = round(float(fila["Tasa_Interes"]), 2)
+                    if m_val < 13:
+                        tasa_prev = t_val
+                    else:
+                        if tasa_prev is not None and t_val != tasa_prev and t_val > 0:
+                            reajustes_dict[m_val] = t_val
+                            tasa_prev = t_val
+                except Exception:
+                    continue
     except Exception:
         pass
         
     st.session_state["pagos_lista"] = pagos[:240]
     st.session_state["abonos_guardados"] = abonos_dict
+    st.session_state["reajustes_tasa"] = reajustes_dict
     st.session_state["datos_cargados"] = True
+
+if "reajustes_tasa" not in st.session_state:
+    st.session_state["reajustes_tasa"] = {}
 
 def actualizar_check(idx):
     st.session_state["pagos_lista"][idx] = st.session_state[f"chk_{idx}"]
@@ -110,8 +133,8 @@ with st.sidebar:
     fecha_inicio = st.date_input("Fecha inicio / primera cuota", date(2026, 12, 1))
     valor_vivienda = st.number_input("Valor casa ($)", value=315000.0, step=5000.0)
     monto = st.number_input("Monto Financiado ($)", value=240000.0, step=1000.0)
-    tasa_anual = st.number_input("Tasa Anual (%)", value=6.5, step=0.1)
-    plazo_anios = st.number_input("Plazo (Anios)", value=20, step=1)
+    tasa_anual = st.number_input("Tasa Efectiva Año 1 (%)", value=6.5, step=0.1, help="Tasa fija durante el primer año (Meses 1 a 12). A partir del Mes 13 es reajustable semestralmente.")
+    plazo_anios = st.number_input("Plazo Original (Anios)", value=20, step=1)
     
     st.header("2. Seguros")
     tasa_desgravamen = st.number_input("Seg. Desgravamen (%)", value=0.72, step=0.01)
@@ -122,23 +145,26 @@ with st.sidebar:
 
 # Parámetros calculados en caliente
 meses_orig = int(plazo_anios * 12)
-tasa_mes = (tasa_anual / 100.0) / 12.0
 tasa_desg_mes = (tasa_desgravamen / 100.0) / 12.0
 cuota_incendio = (valor_vivienda * (tasa_incendio / 100.0)) / 12.0
 
-# Motor de amortización con soporte para múltiples abonos acumulados
-def calcular_cronograma_multi_abono(
+# Motor de amortización con soporte para tasa reajustable semestral y multi-abono
+def calcular_cronograma_financiero(
     monto_val, plazo_anios_val, sistema_val, fecha_val, 
-    t_anual_val, t_desg_val, t_inc_val, v_casa_val,
-    diccionario_abonos=None
+    t_anual_base, t_desg_val, t_inc_val, v_casa_val,
+    diccionario_reajustes=None, diccionario_abonos=None
 ):
+    if diccionario_reajustes is None:
+        diccionario_reajustes = {}
     if diccionario_abonos is None:
         diccionario_abonos = {}
         
     plazo_m_orig = int(plazo_anios_val * 12)
-    tm = (t_anual_val / 100.0) / 12.0
     tdm = (t_desg_val / 100.0) / 12.0
     ci = (v_casa_val * (t_inc_val / 100.0)) / 12.0
+
+    tasa_actual = t_anual_base
+    tm = (tasa_actual / 100.0) / 12.0
 
     if "Frances" in sistema_val:
         factor = (1.0 + tm) ** plazo_m_orig
@@ -149,12 +175,26 @@ def calcular_cronograma_multi_abono(
     saldo = float(monto_val)
     tabla = []
     mes = 0
+    mes_final_proyectado = plazo_m_orig
 
     while saldo > 0.01 and mes < 360:
         mes += 1
+
+        # 1. Aplicación de Reajuste de Tasa Semestral si corresponde
+        if mes in diccionario_reajustes:
+            tasa_actual = float(diccionario_reajustes[mes])
+            tm = (tasa_actual / 100.0) / 12.0
+            meses_rest = max(1, mes_final_proyectado - (mes - 1))
+            if "Frances" in sistema_val:
+                factor_reaj = (1.0 + tm) ** meses_rest
+                cuota_cap_int_actual = saldo * (tm * factor_reaj) / (factor_reaj - 1.0)
+            else:
+                abono_capital_fijo = saldo / meses_rest
+
         interes = saldo * tm
         seg_desg = saldo * tdm
 
+        # 2. Verificación de Abono Extraordinario
         datos_abono = diccionario_abonos.get(mes, None)
         extra = float(datos_abono["monto"]) if datos_abono else 0.0
         tipo_ab = datos_abono["tipo"] if datos_abono else ""
@@ -178,6 +218,7 @@ def calcular_cronograma_multi_abono(
             "Mes": mes,
             "Fecha": fecha_pago.strftime('%Y-%m'),
             "Anio": fecha_pago.year,
+            "Tasa_Anual": tasa_actual,
             "Capital": round(capital_total, 2),
             "Capital_Regular": round(capital_reg, 2),
             "Abono_Extra": round(extra, 2),
@@ -188,28 +229,41 @@ def calcular_cronograma_multi_abono(
             "Saldo": round(max(0.0, saldo), 2)
         })
 
-        if extra > 0 and saldo > 0.01 and tipo_ab == "Reducir Cuota":
-            meses_rest = plazo_m_orig - mes
-            if meses_rest > 0:
+        # 3. Recálculo en caso de abono extraordinario
+        if extra > 0 and saldo > 0.01:
+            if tipo_ab == "Reducir Cuota":
+                meses_restantes = max(1, mes_final_proyectado - mes)
                 if "Frances" in sistema_val:
-                    factor_n = (1.0 + tm) ** meses_rest
+                    factor_n = (1.0 + tm) ** meses_restantes
                     cuota_cap_int_actual = saldo * (tm * factor_n) / (factor_n - 1.0)
                 else:
-                    abono_capital_fijo = saldo / meses_rest
+                    abono_capital_fijo = saldo / meses_restantes
+            elif tipo_ab == "Reducir Plazo":
+                if "Frances" in sistema_val:
+                    try:
+                        n_meses_rem = -np.log(1.0 - (saldo * tm) / cuota_cap_int_actual) / np.log(1.0 + tm)
+                        n_meses_rem = int(np.ceil(n_meses_rem))
+                        mes_final_proyectado = mes + n_meses_rem
+                    except Exception:
+                        pass
+                else:
+                    n_meses_rem = int(np.ceil(saldo / abono_capital_fijo))
+                    mes_final_proyectado = mes + n_meses_rem
 
     return pd.DataFrame(tabla)
 
-# 1. Cronograma Original de referencia sin abonos
-df_original = calcular_cronograma_multi_abono(
+# 1. Cronograma Original de referencia sin abonos ni reajustes
+df_original = calcular_cronograma_financiero(
     monto, plazo_anios, sistema, fecha_inicio,
     tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda,
-    diccionario_abonos={}
+    diccionario_reajustes={}, diccionario_abonos={}
 )
 
-# 2. Cronograma Real con TODOS los abonos acumulados guardados
-df_base = calcular_cronograma_multi_abono(
+# 2. Cronograma Real con TODOS los abonos y reajustes aplicados
+df_base = calcular_cronograma_financiero(
     monto, plazo_anios, sistema, fecha_inicio,
     tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda,
+    diccionario_reajustes=st.session_state["reajustes_tasa"],
     diccionario_abonos=st.session_state["abonos_guardados"]
 )
 
@@ -218,7 +272,7 @@ meses_ahorrados_totales = max(0, len(df_original) - len(df_base))
 ahorro_intereses_total = max(0.0, df_original["Interes"].sum() - df_base["Interes"].sum())
 total_abonado_capital = sum(v["monto"] for v in st.session_state["abonos_guardados"].values())
 
-# Función para guardar datos
+# Función para sincronizar Cronograma Completo (8 Columnas)
 def guardar_en_nube():
     payload = []
     for _, fila in df_base.iterrows():
@@ -227,6 +281,7 @@ def guardar_en_nube():
         info_ab = st.session_state["abonos_guardados"].get(m_num, None)
         ab_monto = float(info_ab["monto"]) if info_ab else 0.0
         ab_tipo = str(info_ab["tipo"]) if info_ab else ""
+        
         payload.append({
             "mes": m_num,
             "fecha": str(fila["Fecha"]),
@@ -234,7 +289,8 @@ def guardar_en_nube():
             "pagado": esta_pag,
             "abono": ab_monto,
             "tipo": ab_tipo,
-            "saldo": float(fila["Saldo"])
+            "saldo": float(fila["Saldo"]),
+            "tasa": float(fila["Tasa_Anual"])
         })
     try:
         url_destino = URL_PUENTE.strip()
@@ -334,7 +390,9 @@ def generar_pdf():
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*C_RGB_TEXT)
     pdf.cell(95, 5, f"Monto Financiado: ${monto:,.2f}")
-    pdf.cell(95, 5, f"Tasa Nominal Anual: {tasa_anual:.2f}%", ln=True)
+    
+    tasa_actual_vigente = df_base.iloc[proximo_mes_idx]["Tasa_Anual"]
+    pdf.cell(95, 5, f"Tasa Efectiva Vigente: {tasa_actual_vigente:.2f}% (Base: {tasa_anual:.2f}%)", ln=True)
     pdf.cell(95, 5, f"Sistema: {sistema.split(' ')[0]}")
     
     if len(st.session_state["abonos_guardados"]) > 0:
@@ -435,6 +493,53 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 with tab1:
     st.subheader("Registro de Cuotas Canceladas")
     
+    # Módulo para Reajuste Semestral de Tasa
+    with st.expander("🔄 **Reajustes Semestrales de Tasa de Interés (Año 2 en adelante)**", expanded=False):
+        st.markdown("El crédito mantiene una tasa fija durante el primer año (Meses 1 a 12). A partir del Mes 13, Produbanco reajusta la tasa semestralmente.")
+        
+        col_rej1, col_rej2, col_rej3 = st.columns([2, 1.5, 1.5])
+        opciones_semestres = {}
+        for m in range(13, int(meses_orig) + 1, 6):
+            f_p = fecha_inicio + relativedelta(months=m - 1)
+            a_n = ((m - 1) // 12) + 1
+            s_n = 1 if ((m - 1) % 12) < 6 else 2
+            opciones_semestres[m] = f"Mes {m} ({f_p.strftime('%Y-%m')}) - Año {a_n}, Semestre {s_n}"
+            
+        semestre_sel = col_rej1.selectbox("Selecciona el Semestre / Mes a Reajustar:", list(opciones_semestres.keys()), format_func=lambda x: opciones_semestres[x], key="sel_semestre_reajuste")
+        tasa_actual_semestre = st.session_state["reajustes_tasa"].get(semestre_sel, tasa_anual)
+        nueva_tasa_val = col_rej2.number_input("Nueva Tasa Efectiva Anual (%)", min_value=1.0, max_value=25.0, value=float(tasa_actual_semestre), step=0.05, format="%.2f", key="input_nueva_tasa_semestre")
+        
+        col_rej3.write("")
+        col_rej3.write("")
+        if col_rej3.button("💾 Aplicar Reajuste de Tasa", key="btn_guardar_tasa_sem"):
+            st.session_state["reajustes_tasa"][semestre_sel] = round(nueva_tasa_val, 2)
+            guardar_en_nube()
+            st.rerun()
+            
+        if len(st.session_state["reajustes_tasa"]) > 0:
+            st.markdown("---")
+            st.markdown("##### 📋 Historial de Tasas Reajustadas:")
+            filas_tasas = [{"Periodo": "Año 1 (Fijo)", "Mes de Inicio": "Mes 1", "Fecha": fecha_inicio.strftime('%Y-%m'), "Tasa Efectiva Anual": f"{tasa_anual:.2f}%"}]
+            for m_k in sorted(st.session_state["reajustes_tasa"].keys()):
+                f_k = fecha_inicio + relativedelta(months=m_k - 1)
+                a_k = ((m_k - 1) // 12) + 1
+                s_k = 1 if ((m_k - 1) % 12) < 6 else 2
+                filas_tasas.append({
+                    "Periodo": f"Año {a_k}, Semestre {s_k}",
+                    "Mes de Inicio": f"Mes {m_k}",
+                    "Fecha": f_k.strftime('%Y-%m'),
+                    "Tasa Efectiva Anual": f"{st.session_state['reajustes_tasa'][m_k]:.2f}%"
+                })
+            st.dataframe(pd.DataFrame(filas_tasas), use_container_width=True)
+            
+            c_del1, c_del2 = st.columns([2, 1])
+            sem_del = c_del1.selectbox("Selecciona un reajuste para eliminar:", sorted(st.session_state["reajustes_tasa"].keys()), format_func=lambda x: opciones_semestres.get(x, f"Mes {x}"), key="sel_elim_tasa")
+            if c_del2.button("🗑️ Eliminar Reajuste", key="btn_elim_tasa"):
+                if sem_del in st.session_state["reajustes_tasa"]:
+                    del st.session_state["reajustes_tasa"][sem_del]
+                    guardar_en_nube()
+                    st.rerun()
+
     if len(st.session_state["abonos_guardados"]) > 0:
         st.success(f"⚡ **Crédito Optimizado con {len(st.session_state['abonos_guardados'])} Abono(s) Activo(s):** Total abonado: **\\${total_abonado_capital:,.2f}** | Plazo actual: **{meses_totales} cuotas** ({meses_totales/12:.1f} años) | Ahorro total en intereses: **\\${ahorro_intereses_total:,.2f}**")
             
@@ -454,7 +559,7 @@ with tab1:
     
     for i in range(mes_inicio_vista, mes_fin_vista):
         fila = df_base.iloc[i]
-        c1, c2, c3, c4 = st.columns([1, 2, 2.5, 1.5])
+        c1, c2, c3, c4 = st.columns([1, 2, 2.7, 1.3])
         valor_actual = st.session_state["pagos_lista"][i]
         
         check = c1.checkbox(
@@ -467,11 +572,11 @@ with tab1:
         c2.write(f"📅 **{fila['Fecha']}**")
         
         if fila['Abono_Extra'] > 0:
-            c3.markdown(f"💵 **Cuota:** \\${fila['Cuota_Total']:,.2f} *(Incluye Abono \\${fila['Abono_Extra']:,.0f})*")
+            c3.markdown(f"💵 **Cuota:** \\${fila['Cuota_Total']:,.2f} *(\\${fila['Abono_Extra']:,.0f} Abono)* | {fila['Tasa_Anual']:.2f}%")
         elif i == meses_totales - 1 and meses_ahorrados_totales > 0:
-            c3.markdown(f"💵 **Cuota Final:** \\${fila['Cuota_Total']:,.2f} 🏁 *(Liquidación deuda)*")
+            c3.markdown(f"💵 **Cuota Final:** \\${fila['Cuota_Total']:,.2f} 🏁 *(Liquidación)* | {fila['Tasa_Anual']:.2f}%")
         else:
-            c3.write(f"💵 **Cuota:** \\${fila['Cuota_Total']:,.2f}")
+            c3.write(f"💵 **Cuota:** \\${fila['Cuota_Total']:,.2f} ({fila['Tasa_Anual']:.2f}%)")
             
         c4.markdown("✅ *Pagado*" if valor_actual else "⏳ *Pendiente*")
         st.divider()
@@ -570,12 +675,12 @@ with tab2:
     
     fig_saldo = go.Figure()
     
-    if len(st.session_state["abonos_guardados"]) > 0:
+    if len(st.session_state["abonos_guardados"]) > 0 or len(st.session_state["reajustes_tasa"]) > 0:
         fig_saldo.add_trace(go.Scatter(
             x=df_original["Mes"],
             y=df_original["Saldo"],
             mode="lines",
-            name="Trayectoria Original (Sin Abonos)",
+            name="Trayectoria Original (Tasa Fija Sin Abonos)",
             line=dict(color="#A0AEC0", dash="dash")
         ))
         
@@ -583,7 +688,7 @@ with tab2:
         x=df_base["Mes"],
         y=df_base["Saldo"],
         mode="lines",
-        name="Saldo con Abonos Aplicados" if len(st.session_state["abonos_guardados"]) > 0 else "Saldo Deudor",
+        name="Saldo Dinámico (Abonos + Tasas)",
         fill="tozeroy",
         line=dict(color=COLOR_NAVY, width=2.5)
     ))
@@ -623,9 +728,10 @@ with tab3:
         dict_temp = dict(st.session_state["abonos_guardados"])
         dict_temp[int(sim_mes)] = {"monto": float(sim_monto), "tipo": sim_tipo}
         
-        df_simulacion = calcular_cronograma_multi_abono(
+        df_simulacion = calcular_cronograma_financiero(
             monto, plazo_anios, sistema, fecha_inicio,
             tasa_anual, tasa_desgravamen, tasa_incendio, valor_vivienda,
+            diccionario_reajustes=st.session_state["reajustes_tasa"],
             diccionario_abonos=dict_temp
         )
         
@@ -725,13 +831,14 @@ with tab4:
     meses_transcurridos = cuotas_pagadas_actual
     tot_int_snow = int_pagado
     
-    factor_ref = (1 + tasa_mes) ** meses_orig
-    cuota_fija_cap_int = monto * (tasa_mes * factor_ref) / (factor_ref - 1)
+    factor_ref = (1 + (tasa_anual/1200)) ** meses_orig
+    cuota_fija_cap_int = monto * ((tasa_anual/1200) * factor_ref) / (factor_ref - 1)
     
     mes_actual_sim = meses_transcurridos
     while saldo_snow > 0.01 and mes_actual_sim < 360:
         mes_actual_sim += 1
-        interes_mes = saldo_snow * tasa_mes
+        tasa_mes_sim = (df_base.loc[df_base['Mes']==min(mes_actual_sim, len(df_base)), 'Tasa_Anual'].values[0] / 1200) if mes_actual_sim <= len(df_base) else (tasa_anual/1200)
+        interes_mes = saldo_snow * tasa_mes_sim
         tot_int_snow += interes_mes
         
         capital_regular = cuota_fija_cap_int - interes_mes
