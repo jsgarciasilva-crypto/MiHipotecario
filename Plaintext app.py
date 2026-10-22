@@ -1,17 +1,19 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
+from fpdf import FPDF
 from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Mi Crédito Produbanco", layout="wide", page_icon="🏦")
 
 st.title("🏦 Dashboard Hipotecario - Produbanco")
-st.markdown("Monitorea tu crédito, marca tus cuotas canceladas y consérvalas en la nube.")
+st.markdown("Monitorea tu crédito, audita tus porcentajes de avance y descarga reportes ejecutivos.")
 
 # --- ENLACES DE CONEXIÓN ---
 URL_HOJA = "https://docs.google.com/spreadsheets/d/1hOwRmaPU6BhM0gRl_8-yLcuOZuWC-W_iw1sk7lAwyRs/edit?usp=sharing"
@@ -94,22 +96,121 @@ def generar_amortizacion(monto_inicial, plazo_meses, sistema_amort, fecha_arranq
 
 df_base = generar_amortizacion(monto, meses, sistema, fecha_inicio)
 
-# Total de cuotas pagadas según la hoja
+# Consolidación de Pagos
 cuotas_pagadas_actual = int(df_checks["Estado_Pago"].sum())
 
-if cuotas_pagadas_actual > 0 and cuotas_pagadas_actual <= meses:
-    saldo_actual = df_base.loc[cuotas_pagadas_actual - 1, "Saldo Deudor ($)"]
-    capital_ya_pagado = monto - saldo_actual
-else:
-    saldo_actual = monto
-    capital_ya_pagado = 0.0
+# Desglose Financiero de Avance
+df_pagado = df_base.iloc[:cuotas_pagadas_actual] if cuotas_pagadas_actual > 0 else pd.DataFrame(columns=df_base.columns)
+
+cap_pagado = df_pagado["Capital ($)"].sum() if not df_pagado.empty else 0.0
+int_pagado = df_pagado["Interés ($)"].sum() if not df_pagado.empty else 0.0
+seg_pagado = df_pagado["Seguros ($)"].sum() if not df_pagado.empty else 0.0
+tot_desembolsado = cap_pagado + int_pagado + seg_pagado
+
+cap_total = monto
+int_total = df_base["Interés ($)"].sum()
+seg_total = df_base["Seguros ($)"].sum()
+costo_total_credito = cap_total + int_total + seg_total
+
+saldo_deudor = df_base.loc[cuotas_pagadas_actual - 1, "Saldo Deudor ($)"] if cuotas_pagadas_actual > 0 else monto
+int_pendiente = max(0.0, int_total - int_pagado)
+seg_pendiente = max(0.0, seg_total - seg_pagado)
+costo_pendiente = max(0.0, costo_total_credito - tot_desembolsado)
+
+pct_cap = (cap_pagado / cap_total * 100) if cap_total > 0 else 0
+pct_int = (int_pagado / int_total * 100) if int_total > 0 else 0
+pct_seg = (seg_pagado / seg_total * 100) if seg_total > 0 else 0
+pct_tot = (tot_desembolsado / costo_total_credito * 100) if costo_total_credito > 0 else 0
+
+# --- FUNCIÓN GENERADORA DEL PDF ---
+def generar_pdf():
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # Encabezado
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 10, "ESTADO DE CUENTA HIPOTECARIO", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, f"Generado el: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+    pdf.ln(8)
+    
+    # Datos Principales
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, "1. CONDICIONES DEL CREDITO", ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(95, 6, f"Monto Financiado: ${monto:,.2f}", border=0)
+    pdf.cell(95, 6, f"Tasa Nominal Anual: {tasa_anual:.2f}%", border=0, ln=True)
+    pdf.cell(95, 6, f"Sistema: {sistema.split(' ')[0]}", border=0)
+    pdf.cell(95, 6, f"Plazo Original: {plazo_anios} anios ({meses} meses)", border=0, ln=True)
+    pdf.cell(95, 6, f"Fecha Primera Cuota: {fecha_inicio.strftime('%Y-%m-%d')}", border=0)
+    pdf.cell(95, 6, f"Cuotas Canceladas: {cuotas_pagadas_actual} de {meses}", border=0, ln=True)
+    pdf.ln(6)
+    
+    # Resumen Financiero Actual
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, "2. ESTADO ACTUAL DE LA DEUDA", ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(95, 6, f"Saldo Deudor Pendiente: ${saldo_deudor:,.2f}", border=0)
+    pdf.cell(95, 6, f"Capital Amortizado: ${cap_pagado:,.2f}", border=0, ln=True)
+    pdf.cell(95, 6, f"Porcentaje de Propiedad Pagado: {pct_cap:.2f}%", border=0)
+    pdf.cell(95, 6, f"Cuotas Pendientes: {meses - cuotas_pagadas_actual}", border=0, ln=True)
+    pdf.ln(6)
+    
+    # Tabla de Avance de Rubros
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, "3. DESGLOSE FINANCIERO Y AVANCE", ln=True)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(230, 230, 230)
+    
+    pdf.cell(40, 7, "Rubro", 1, 0, "C", fill=True)
+    pdf.cell(38, 7, "Total Proyectado", 1, 0, "C", fill=True)
+    pdf.cell(38, 7, "Pagado a la Fecha", 1, 0, "C", fill=True)
+    pdf.cell(38, 7, "Saldo Pendiente", 1, 0, "C", fill=True)
+    pdf.cell(36, 7, "% Pagado", 1, 1, "C", fill=True)
+    
+    pdf.set_font("Helvetica", "", 9)
+    datos_tabla = [
+        ("Capital", cap_total, cap_pagado, saldo_deudor, pct_cap),
+        ("Intereses", int_total, int_pagado, int_pendiente, pct_int),
+        ("Seguros", seg_total, seg_pagado, seg_pendiente, pct_seg),
+        ("TOTAL GENERAL", costo_total_credito, tot_desembolsado, costo_pendiente, pct_tot),
+    ]
+    
+    for r, tot, pag, sal, p in datos_tabla:
+        bold_flag = "B" if r == "TOTAL GENERAL" else ""
+        pdf.set_font("Helvetica", bold_flag, 9)
+        pdf.cell(40, 6, r, 1, 0, "L")
+        pdf.cell(38, 6, f"${tot:,.2f}", 1, 0, "R")
+        pdf.cell(38, 6, f"${pag:,.2f}", 1, 0, "R")
+        pdf.cell(38, 6, f"${sal:,.2f}", 1, 0, "R")
+        pdf.cell(36, 6, f"{p:.1f}%", 1, 1, "R")
+        
+    pdf.ln(8)
+    
+    # Proyección SRI
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, "4. PROYECCION DE INTERESES DEDUCIBLES (SRI)", ln=True)
+    pdf.set_font("Helvetica", "", 9)
+    sri_calc = df_base.groupby("Año Calendario")["Interés ($)"].sum().reset_index()
+    for _, fila in sri_calc.iterrows():
+        pdf.cell(60, 5, f"Ejercicio Fiscal {int(fila['Año Calendario'])}:", border=0)
+        pdf.cell(50, 5, f"${fila['Interés ($)']:,.2f}", border=0, ln=True)
+        
+    return bytes(pdf.output())
 
 # --- PESTAÑAS DE NAVEGACIÓN ---
-tab1, tab2, tab3, tab4 = st.tabs(["☑️ Control de Pagos", "📊 Mi Realidad Actual", "💸 Abonos Extra", "📈 SRI"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "☑️ Control de Pagos", 
+    "📊 Avance y Rubros", 
+    "💸 Abonos Extra", 
+    "📈 SRI", 
+    "📄 Reporte PDF"
+])
 
 with tab1:
     st.subheader("Registro de Cuotas Canceladas")
-    st.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses}**")
+    st.info(f"Cuotas pagadas registradas: **{cuotas_pagadas_actual} de {meses}** | Saldo Deudor: **${saldo_deudor:,.2f}**")
     
     anios_credito = list(range(1, int(plazo_anios) + 1))
     anio_seleccionado = st.selectbox("Selecciona el Año del Crédito:", anios_credito)
@@ -150,60 +251,26 @@ with tab1:
                     st.error(f"Error al enviar datos: {err_puente}")
 
 with tab2:
-    st.subheader("Tu situación al día de hoy")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Saldo Deudor ACTUAL", f"${saldo_actual:,.2f}", f"Has pagado ${capital_ya_pagado:,.2f}")
-    col2.metric("Cuota Mensual Fija", f"${df_base.loc[0, 'Cuota Total ($)']:,.2f}")
-    col3.metric("Cuotas Restantes", f"{meses - cuotas_pagadas_actual} de {meses}")
+    st.subheader("Auditoría de Pagos y Porcentajes de Avance")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Capital Amortizado", f"${cap_pagado:,.2f}", f"{pct_cap:.1f}% del total")
+    c2.metric("Intereses Cancelados", f"${int_pagado:,.2f}", f"{pct_int:.1f}% del total")
+    c3.metric("Seguros Desembolsados", f"${seg_pagado:,.2f}", f"{pct_seg:.1f}% del total")
+    c4.metric("Desembolso General", f"${tot_desembolsado:,.2f}", f"{pct_tot:.1f}% del total")
 
     st.markdown("---")
-    st.markdown("#### Progreso de tu propiedad")
-    porcentaje_pagado = (capital_ya_pagado / monto) * 100 if monto > 0 else 0
-    st.progress(min(100, int(porcentaje_pagado)))
-    st.caption(f"Ya eres dueño del **{porcentaje_pagado:.1f}%** del inmueble.")
-
-with tab3:
-    st.subheader("Simulador de Abonos Extraordinarios")
-    col_a, col_b, col_c = st.columns(3)
-    mes_sug = min(cuotas_pagadas_actual + 1, meses)
+    st.markdown("#### Tabla de Distribución Financiera")
     
-    mes_abono = col_a.number_input("Mes del abono", min_value=1, max_value=meses, value=mes_sug)
-    monto_abono = col_b.number_input("Monto del Abono ($)", min_value=100.0, value=5000.0, step=500.0)
-    tipo_beneficio = col_c.radio("Objetivo del abono", ["Reducir Plazo", "Reducir Cuota"])
+    tabla_resumen = pd.DataFrame({
+        "Rubro": ["Capital", "Intereses", "Seguros", "Total General"],
+        "Total Proyectado ($)": [cap_total, int_total, seg_total, costo_total_credito],
+        "Pagado a la Fecha ($)": [cap_pagado, int_pagado, seg_pagado, tot_desembolsado],
+        "% Pagado": [f"{pct_cap:.2f}%", f"{pct_int:.2f}%", f"{pct_seg:.2f}%", f"{pct_tot:.2f}%"],
+        "Saldo Pendiente ($)": [saldo_deudor, int_pendiente, seg_pendiente, costo_pendiente],
+        "% Pendiente": [f"{100-pct_cap:.2f}%", f"{100-pct_int:.2f}%", f"{100-pct_seg:.2f}%", f"{100-pct_tot:.2f}%"]
+    })
     
-    if st.button("Calcular impacto del abono"):
-        if mes_abono < meses:
-            saldo_en_mes = df_base.loc[mes_abono-1, 'Saldo Deudor ($)']
-            if monto_abono >= saldo_en_mes:
-                st.success("¡Con este monto cancelas la totalidad de la deuda!")
-            else:
-                nuevo_saldo = saldo_en_mes - monto_abono
-                meses_restantes = meses - mes_abono
-                tot_int_orig = df_base['Interés ($)'].sum()
-                
-                if tipo_beneficio == "Reducir Cuota":
-                    df_nuevo = generar_amortizacion(nuevo_saldo, meses_restantes, sistema, fecha_inicio + relativedelta(months=mes_abono))
-                    nueva_cuota = df_nuevo.loc[0, 'Cuota Total ($)']
-                    ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interés ($)'].sum() + df_nuevo['Interés ($)'].sum())
-                    st.success(f"Tu nueva cuota baja a: **${nueva_cuota:,.2f}**")
-                    st.info(f"Ahorro estimado en intereses: **${ahorro:,.2f}**")
-                else:
-                    cuota_ref = df_base.loc[mes_abono, 'Capital ($)'] + df_base.loc[mes_abono, 'Interés ($)']
-                    try:
-                        n_meses = -np.log(1 - (nuevo_saldo * tasa_mes) / cuota_ref) / np.log(1 + tasa_mes)
-                        n_meses = int(np.ceil(n_meses))
-                        ahorrados = meses_restantes - n_meses
-                        df_nuevo = generar_amortizacion(nuevo_saldo, n_meses, sistema, fecha_inicio + relativedelta(months=mes_abono))
-                        ahorro = tot_int_orig - (df_base.loc[:mes_abono-1, 'Interés ($)'].sum() + df_nuevo['Interés ($)'].sum())
-                        st.success(f"Terminas de pagar **{ahorrados} meses antes**.")
-                        st.info(f"Ahorro estimado en intereses: **${ahorro:,.2f}**")
-                    except Exception:
-                        st.info("El abono cubre la totalidad del crédito pendiente.")
-        else:
-            st.warning("No es posible realizar un abono en la última cuota.")
-
-with tab4:
-    st.subheader("🏛️ Proyección SRI (Intereses Deducibles)")
-    sri_df = df_base.groupby('Año Calendario')['Interés ($)'].sum().reset_index()
-    sri_df.columns = ['Año Fiscal', 'Intereses Deducibles ($)']
-    st.dataframe(sri_df.style.format({'Intereses Deducibles ($)': '${:,.2f}'}), use_container_width=True)
+    st.dataframe(
+        tabla_resumen.style.format({
+            "Total Proyectado ($)
